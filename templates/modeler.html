@@ -6,22 +6,19 @@
     <title>Gemini API 데이터 생성기</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500&family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Roboto:wght@400;500&display=swap" rel="stylesheet">
     <style>
-        /* --- [수정] 가독성 개선을 위한 색상 팔레트 변경 --- */
         :root {
-            --background-color: #131314;
-            --surface-color: #1e1f20;
-            --text-color: #e3e3e3;
-            --secondary-text-color: #c4c7c5;
-            /* [수정] 사용자 버블 색상을 더 밝게 변경 */
-            --user-bubble-color: #2E4C6D; 
-            /* [수정] LLM 버블 색상을 배경과 명확히 구분되도록 변경 */
-            --llm-bubble-color: #3C4043;
-            --input-bar-color: #1f1f1f;
-            --border-color: #5f6368; /* [수정] 경계선 색상도 약간 밝게 */
+            --background-color: #FFFFFF;
+            --surface-color: #F0F2F5;
+            --text-color: #050505;
+            --secondary-text-color: #65676B;
+            --user-bubble-color: #D8E6FF;
+            --llm-bubble-color: #E4E6EB;
+            --input-bar-color: #F0F2F5;
+            --border-color: #CED0D4;
+            --primary-color: #1A73E8;
         }
-
         * { box-sizing: border-box; }
         body {
             background-color: var(--background-color); color: var(--text-color);
@@ -35,37 +32,22 @@
         #chat-window { flex-grow: 1; overflow-y: auto; padding-right: 10px; }
         #chat-window::-webkit-scrollbar { width: 8px; }
         #chat-window::-webkit-scrollbar-track { background: transparent; }
-        #chat-window::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
-        
-        .message { margin-bottom: 2rem; display: flex; align-items: flex-start; gap: 1rem; }
-        
+        #chat-window::-webkit-scrollbar-thumb { background: #BCC0C4; border-radius: 4px; }
+        .message { margin-bottom: 1rem; display: flex; align-items: flex-start; gap: 1rem; }
         .avatar {
             width: 32px; height: 32px; border-radius: 50%;
             display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0;
-            /* [수정] 아바타 배경색도 버블 색상과 동기화 */
             background-color: var(--llm-bubble-color);
         }
-
-        .user-message .avatar {
-            background-color: var(--user-bubble-color);
-        }
-
+        .user-message .avatar { background-color: var(--user-bubble-color); }
         .bubble {
-            padding: 0.75rem 1.1rem; /* [수정] 패딩 추가로 텍스트와 경계 사이에 여백 확보 */
-            max-width: calc(100% - 48px);
-            border-radius: 12px;
-            /* [수정] 버블 배경색 지정 */
-            background-color: var(--llm-bubble-color);
+            padding: 0.75rem 1.1rem; max-width: calc(100% - 48px);
+            border-radius: 12px; background-color: var(--llm-bubble-color);
         }
-        .user-message .bubble {
-            background-color: var(--user-bubble-color);
-        }
-
+        .user-message .bubble { background-color: var(--user-bubble-color); }
         .bubble p { margin: 0 0 0.5em 0; line-height: 1.6; }
         .bubble p:last-child { margin-bottom: 0; }
-        .bubble pre { background-color: #131212; padding: 1em; border-radius: 8px; white-space: pre-wrap; word-wrap: break-word; }
-        .bubble code { font-family: 'SF Mono', 'Menlo', monospace; background-color: #333; padding: 0.2em 0.4em; border-radius: 4px; }
-        .bubble pre code { background-color: transparent; padding: 0; }
+        .bubble pre { display: none; } /* JSON은 숨기고 별도 영역에 표시 */
         
         #chat-form-wrapper { padding: 1rem 0; }
         #chat-form {
@@ -82,17 +64,72 @@
             font-size: 1.5rem; cursor: pointer; padding: 0.5rem;
         }
         #submit-button:disabled { opacity: 0.5; cursor: not-allowed; }
-        #log-container {
-            font-family: monospace; background-color: var(--surface-color); border: 1px solid var(--border-color);
-            border-radius: 8px; padding: 1rem; max-height: 300px; overflow-y: auto;
-            margin-top: 1rem; display: none;
-        }
-        #api-status {
-            font-size: 0.85rem; padding: 0.3rem 0.6rem;
-            border-radius: 0.25rem; font-weight: 500;
-        }
+        #api-status { font-size: 0.85rem; padding: 0.3rem 0.6rem; border-radius: 0.25rem; font-weight: 500; }
         .status-ok { background-color: #d1e7dd; color: #0f5132; }
         .status-error { background-color: #f8d7da; color: #842029; }
+
+        /* --- [수정/추가] 모델 제안 표시 영역 스타일 --- */
+        #model-preview-container {
+            padding: 1.5rem;
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            margin-top: 1rem;
+            background-color: #f9f9f9;
+            display: none; /* 평소에는 숨김 */
+        }
+        #model-preview-container h5 {
+            font-family: 'Noto Sans KR', sans-serif;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+        }
+        .model-preview-section { margin-bottom: 2rem; }
+        .model-preview-section h6 {
+            font-family: 'Noto Sans KR', sans-serif;
+            font-weight: 500;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #eee;
+        }
+        .model-preview-section .table {
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .model-preview-section .table th { background-color: #f5f5f5; }
+        .mermaid { text-align: center; padding: 1rem; background-color: white; border-radius: 8px; }
+        .model-preview-section details {
+            margin-top: 1rem;
+            background-color: #fff;
+            padding: 1rem;
+            border-radius: 8px;
+        }
+        .model-preview-section summary { cursor: pointer; font-weight: 500; }
+        .model-preview-section pre { background-color: #2d2d2d; color: #f1f1f1; padding: 1em; border-radius: 8px; white-space: pre-wrap; word-wrap: break-word; }
+
+        .action-buttons {
+            margin-top: 1.5rem;
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+        }
+        .action-buttons button {
+            background-color: var(--surface-color); border: 1px solid var(--border-color);
+            color: var(--text-color); padding: 0.6rem 1.2rem; border-radius: 8px;
+            cursor: pointer; font-size: 0.9rem; font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        .action-buttons button:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .action-buttons button.confirm-btn {
+            background-color: var(--primary-color); color: white; border-color: var(--primary-color);
+        }
+        .action-buttons button.confirm-btn:hover { background-color: #185ABC; }
+
+        .step-indicator { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 1.5rem; padding: 0 1rem; }
+        .step { display: flex; flex-direction: column; align-items: center; color: var(--secondary-text-color); transition: color 0.3s; }
+        .step-icon { width: 32px; height: 32px; border-radius: 50%; background-color: var(--surface-color); border: 2px solid var(--border-color); display: flex; align-items: center; justify-content: center; font-weight: 500; transition: all 0.3s ease; }
+        .step-label { margin-top: 0.5rem; font-size: 0.85rem; font-weight: 400; }
+        .step-connector { flex-grow: 1; height: 2px; background-color: var(--border-color); margin: 0 1rem; transform: translateY(-16px); }
+        .step.active .step-icon { background-color: var(--primary-color); border-color: var(--primary-color); color: white; transform: scale(1.1); }
+        .step.active .step-label { color: var(--text-color); font-weight: 500; }
     </style>
 </head>
 <body>
@@ -101,7 +138,18 @@
             <h1 class="h4">AI 어시스턴트와 데이터 생성하기</h1>
             <div id="api-status" class="d-inline-block">API 상태 확인 중...</div>
         </div>
+        
+        <div id="step-indicator" class="step-indicator">
+            <div class="step active" data-step="1"><div class="step-icon">1</div><div class="step-label">요구사항</div></div>
+            <div class="step-connector"></div>
+            <div class="step" data-step="2"><div class="step-icon">2</div><div class="step-label">모델 제안/수정</div></div>
+            <div class="step-connector"></div>
+            <div class="step" data-step="3"><div class="step-icon">3</div><div class="step-label">확정 및 저장</div></div>
+        </div>
+
         <div id="chat-window"></div>
+        <div id="model-preview-container"></div> <!-- 모델 시각화 영역 -->
+        
         <div id="chat-form-wrapper">
             <form id="chat-form">
                 <input type="text" id="message-input" placeholder="메시지를 입력하세요..." autocomplete="off" required>
@@ -110,43 +158,174 @@
                 </button>
             </form>
         </div>
-        <div id="log-container"></div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
+        mermaid.initialize({ startOnLoad: false, theme: 'base', themeVariables: { 'primaryColor': '#F0F2F5', 'primaryTextColor': '#050505', 'lineColor': '#65676B' } });
+
         const chatWindow = document.getElementById('chat-window');
         const chatForm = document.getElementById('chat-form');
         const messageInput = document.getElementById('message-input');
         const submitButton = document.getElementById('submit-button');
-        const logContainer = document.getElementById('log-container');
         const apiStatus = document.getElementById('api-status');
+        const modelPreviewContainer = document.getElementById('model-preview-container');
 
+        function updateStepIndicator(currentStep) {
+            document.querySelectorAll('.step').forEach(stepEl => {
+                stepEl.classList.toggle('active', parseInt(stepEl.dataset.step, 10) <= currentStep);
+            });
+        }
+
+        function extractJsonFromText(text) {
+            const match = text.match(/```json\s*([\s\S]+?)\s*```/);
+            if (match && match[1]) {
+                try { return JSON.parse(match[1]); } catch (e) { return null; }
+            }
+            return null;
+        }
+
+        // --- [신규] 모델 렌더링 함수들 ---
+        function renderTables(modelJson, container) {
+            if (!modelJson.tables?.length) return;
+            modelJson.tables.forEach(table => {
+                const tableWrapper = document.createElement('div');
+                let tableHtml = `<h6><strong>${table.table_name}</strong></h6>
+                                 <table class="table table-bordered table-sm">
+                                   <thead class="table-light">
+                                     <tr><th>컬럼명</th><th>타입</th><th>설명</th></tr>
+                                   </thead><tbody>`;
+                table.columns.forEach(col => {
+                    tableHtml += `<tr>
+                                    <td>${col.column_name || ''}</td>
+                                    <td>${col.data_type || ''}</td>
+                                    <td>${col.description || ''}</td>
+                                  </tr>`;
+                });
+                tableHtml += `</tbody></table>`;
+                tableWrapper.innerHTML = tableHtml;
+                container.appendChild(tableWrapper);
+            });
+        }
+
+        async function renderRelationshipGraph(modelJson, container) {
+            if (!modelJson.tables?.length) { container.style.display = 'none'; return; }
+            const tableNames = modelJson.tables.map(t => t.table_name);
+            let graphDefinition = 'graph TD;\n';
+            tableNames.forEach(name => { graphDefinition += `    ${name}[${name}];\n`; });
+            modelJson.tables.forEach(table => {
+                const sourceTable = table.table_name;
+                table.columns?.forEach(column => {
+                    const colName = column.column_name;
+                    if (colName.endsWith('_id') && colName !== `${sourceTable}_id` && colName !== `${sourceTable.slice(0, -1)}_id`) {
+                        const targetTablePrefix = colName.replace('_id', '');
+                        const targetTable = tableNames.find(name => name === targetTablePrefix || name === `${targetTablePrefix}s`);
+                        if (targetTable && sourceTable !== targetTable) {
+                            graphDefinition += `    ${sourceTable} -- "${colName}" --> ${targetTable};\n`;
+                        }
+                    }
+                });
+            });
+            container.textContent = graphDefinition;
+            await mermaid.run({ nodes: [container] });
+        }
+
+        async function renderProposedModel(modelJson) {
+            updateStepIndicator(2);
+            modelPreviewContainer.innerHTML = '';
+            modelPreviewContainer.style.display = 'block';
+
+            const title = document.createElement('h5');
+            title.innerHTML = '✨ AI 모델 제안';
+            modelPreviewContainer.appendChild(title);
+
+            // 1. 관계도
+            const graphSection = document.createElement('div');
+            graphSection.className = 'model-preview-section';
+            graphSection.innerHTML = '<h6>관계도</h6><div class="mermaid"></div>';
+            modelPreviewContainer.appendChild(graphSection);
+            await renderRelationshipGraph(modelJson, graphSection.querySelector('.mermaid'));
+
+            // 2. 테이블 상세
+            const tablesSection = document.createElement('div');
+            tablesSection.className = 'model-preview-section';
+            tablesSection.innerHTML = '<h6>테이블 명세</h6>';
+            renderTables(modelJson, tablesSection);
+            modelPreviewContainer.appendChild(tablesSection);
+
+            // 3. JSON 원본 (숨김)
+            const jsonSection = document.createElement('div');
+            jsonSection.className = 'model-preview-section';
+            jsonSection.innerHTML = `<details>
+                <summary>JSON 원본 보기</summary>
+                <pre><code>${JSON.stringify(modelJson, null, 2)}</code></pre>
+            </details>`;
+            modelPreviewContainer.appendChild(jsonSection);
+
+            // 4. 액션 버튼
+            const buttonContainer = document.createElement('div');
+            buttonContainer.className = 'action-buttons';
+            buttonContainer.innerHTML = `
+                <button class="modify-btn">✏️ 수정 요청</button>
+                <button class="confirm-btn">✅ 이 모델로 확정</button>
+            `;
+            modelPreviewContainer.appendChild(buttonContainer);
+
+            buttonContainer.querySelector('.confirm-btn').addEventListener('click', async () => {
+                updateStepIndicator(3);
+                buttonContainer.innerHTML = '<p><em>모델을 저장하는 중...</em></p>';
+                try {
+                    const response = await fetch('/save-model', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: modelJson })
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.message);
+                    addMessage(result.message, 'llm');
+                    modelPreviewContainer.style.display = 'none';
+                } catch (error) {
+                    addMessage(`[오류] 모델 저장에 실패했습니다: ${error.message}`, 'llm');
+                    updateStepIndicator(2);
+                }
+            });
+
+            buttonContainer.querySelector('.modify-btn').addEventListener('click', () => {
+                addMessage("어떤 부분을 수정하고 싶으신가요? 자세히 알려주세요.", 'llm');
+                modelPreviewContainer.style.display = 'none';
+                messageInput.focus();
+            });
+            
+            modelPreviewContainer.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // --- 기존 함수 수정 ---
         function addMessage(text, sender) {
             const messageElement = document.createElement('div');
             messageElement.classList.add('message', `${sender}-message`);
             const avatarIcon = sender === 'user' ? '👤' : '✨';
-            
-            // [수정] 버블과 아바타 구조를 단순화하여 CSS로 제어
-            messageElement.innerHTML = `
-                <div class="avatar">${avatarIcon}</div>
-                <div class="bubble"></div>
-            `;
+            messageElement.innerHTML = `<div class="avatar">${avatarIcon}</div><div class="bubble"></div>`;
             const bubble = messageElement.querySelector('.bubble');
-            bubble.innerHTML = marked.parse(text);
+            
+            // JSON 코드 블록은 숨기고 텍스트만 표시
+            const cleanText = text.replace(/```json\s*([\s\S]+?)\s*```/, '');
+            bubble.innerHTML = marked.parse(cleanText);
+
             chatWindow.appendChild(messageElement);
             chatWindow.scrollTop = chatWindow.scrollHeight;
             return messageElement;
         }
 
-        // JavaScript의 나머지 부분은 이전 답변과 동일하게 유지됩니다.
-        // ... (이하 스크립트 코드는 변경 없음) ...
         function handleStream(userMessage) {
             messageInput.disabled = true;
             submitButton.disabled = true;
+            modelPreviewContainer.style.display = 'none';
 
             let llmMessageElement = null;
             let fullResponseText = ""; 
+
+            if (userMessage) updateStepIndicator(1);
 
             fetch('/chat', {
                 method: 'POST',
@@ -155,43 +334,36 @@
             }).then(response => {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-
                 function push() {
-                    reader.read().then(({ done, value }) => {
+                    reader.read().then(async ({ done, value }) => {
                         if (done) {
-                            if (llmMessageElement) {
-                                llmMessageElement.querySelector('.bubble').innerHTML = marked.parse(fullResponseText);
-                            }
                             messageInput.disabled = false;
                             submitButton.disabled = false;
                             messageInput.focus();
                             return;
                         }
-
-                        const chunk = decoder.decode(value, { stream: true });
-                        const lines = chunk.split('\n\n');
-
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n\n').filter(line => line.trim() !== '');
                         for (const line of lines) {
                             if (line.startsWith('data:')) {
-                                try {
-                                    const data = JSON.parse(line.substring(5));
-                                    
-                                    if (!llmMessageElement) {
-                                        llmMessageElement = addMessage('', 'llm');
-                                    }
-
-                                    if (data.type === 'token') {
-                                        fullResponseText += data.content;
-                                        llmMessageElement.querySelector('.bubble').textContent = fullResponseText;
-                                    } else if (data.type === 'full_message' || data.type === 'next_step') {
-                                        fullResponseText = data.content;
-                                        llmMessageElement.querySelector('.bubble').innerHTML = marked.parse(fullResponseText);
-                                        if (data.action === 'start_generation') {
-                                            startGenerationStream();
+                                const data = JSON.parse(line.substring(5));
+                                if (data.type === 'token') {
+                                    if (!llmMessageElement) llmMessageElement = addMessage('', 'llm');
+                                    fullResponseText += data.content;
+                                    const cleanText = fullResponseText.replace(/```json[\s\S]*/, '');
+                                    llmMessageElement.querySelector('.bubble').innerHTML = marked.parse(cleanText + '...');
+                                } else if (data.type === 'full_message') {
+                                    fullResponseText = data.content;
+                                    llmMessageElement = addMessage(fullResponseText, 'llm');
+                                } else if (data.type === 'end_stream') {
+                                    if (llmMessageElement) {
+                                        const modelJson = extractJsonFromText(fullResponseText);
+                                        const explanationText = fullResponseText.replace(/```json\s*([\s\S]+?)\s*```/, '').trim();
+                                        llmMessageElement.querySelector('.bubble').innerHTML = marked.parse(explanationText);
+                                        if (modelJson) {
+                                            await renderProposedModel(modelJson);
                                         }
                                     }
-                                } catch (e) {
-                                    console.error("JSON Parse Error:", e);
                                 }
                             }
                         }
@@ -213,47 +385,25 @@
         });
 
         window.addEventListener('load', async () => {
+            updateStepIndicator(1);
             messageInput.disabled = true;
             submitButton.disabled = true;
-
             try {
                 const statusResponse = await fetch('/api-status');
                 const statusData = await statusResponse.json();
-
                 if (statusData.status === 'ok') {
                     apiStatus.textContent = `🟢 ${statusData.message}`;
-                    apiStatus.className = 'd-inline-block status-ok';
                     handleStream('');
                 } else {
                     apiStatus.textContent = `🔴 ${statusData.message}`;
-                    apiStatus.className = 'd-inline-block status-error';
-                    addMessage(`[시스템 오류] ${statusData.message}\n\n.env 파일의 API 키를 확인하고 페이지를 새로고침 해주세요.`, 'llm');
+                    addMessage(`[시스템 오류] ${statusData.message}`, 'llm');
                 }
             } catch (e) {
-                const errorMsg = '백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
+                const errorMsg = '백엔드 서버에 연결할 수 없습니다.';
                 apiStatus.textContent = `🔴 ${errorMsg}`;
-                apiStatus.className = 'd-inline-block status-error';
                 addMessage(`[시스템 오류] ${errorMsg}`, 'llm');
             }
         });
-
-        function startGenerationStream() {
-            logContainer.style.display = 'block';
-            logContainer.innerHTML = '✅ 데이터 생성 스트림 시작...\n';
-            const eventSource = new EventSource('/start-generation');
-            eventSource.onmessage = function (event) {
-                const logEntry = JSON.parse(event.data);
-                logContainer.innerHTML += `${logEntry.message}\n`;
-                logContainer.scrollTop = logContainer.scrollHeight;
-                if (logEntry.type === 'complete') {
-                    eventSource.close();
-                    addMessage("데이터 생성이 모두 완료되었습니다! 도움이 더 필요하시면 언제든지 말씀해주세요.", 'llm');
-                    messageInput.disabled = false;
-                    submitButton.disabled = false;
-                    messageInput.focus();
-                }
-            };
-        }
     </script>
 </body>
 </html>
