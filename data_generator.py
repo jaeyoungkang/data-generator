@@ -74,9 +74,10 @@ def generate_faker_value(column_detail, table_name, related_data, options=None):
     
     return fake.word()
 
-def generate_table_data(table_name, columns_details, num_rows, related_data=None, options=None):
+def generate_table_data(table_name, columns_details, num_rows, related_data=None, options=None, model_analysis=""):
     """
     LLM을 사용하는 컬럼은 일괄 요청하여 효율적으로 데이터를 생성합니다.
+    모델 분석 결과를 컨텍스트로 활용하여 데이터 품질을 높입니다.
     """
     if related_data is None: related_data = {}
     if options is None: options = {}
@@ -104,12 +105,22 @@ def generate_table_data(table_name, columns_details, num_rows, related_data=None
 
     df = pd.DataFrame(data) if data else pd.DataFrame(columns=[c['column_name'] for c in faker_columns])
 
+    # Prepare context for LLM prompt
+    context_prompt = ""
+    if model_analysis:
+        context_prompt = (
+            "Here is an overall analysis of the data model I'm working with. "
+            "Use this context to generate more realistic and consistent data.\n\n"
+            f"--- Model Analysis ---\n{model_analysis}\n---------------------\n\n"
+        )
+
     for col_detail in llm_columns:
         col_name = col_detail.get('column_name')
         col_desc = col_detail.get('description')
         
         prompt = (
-            f"Generate {num_rows} unique and realistic examples for a column named '{col_name}' in a table. "
+            f"{context_prompt}"
+            f"Based on the context above, generate {num_rows} unique and realistic examples for a column named '{col_name}' in a table. "
             f"The column's purpose is: '{col_desc}'.\n"
             "Please provide the output as a single JSON array of strings. For example: [\"value1\", \"value2\", ...]\n"
             "Do not include any other text or explanation in your response. Only the JSON array."

@@ -8,7 +8,7 @@
     <style>
         .table-responsive { max-height: 300px; }
         #log-container { display: none; max-height: 400px; overflow-y: auto; font-family: monospace; background-color:#212529; color: #f8f9fa; }
-        #generator-controls, #model-info-area, #graph-area, #analysis-result-area { display: none; }
+        #generator-controls, #model-info-area, #graph-area, #analysis-result-area, #llm-analysis-area { display: none; }
         #token-estimation-area, #token-usage-area { display: none; }
 
         #model-info-area .table th,
@@ -27,6 +27,7 @@
         
         #generation-options-modal .form-label { font-weight: 500; }
         .token-card { flex: 1; }
+        #llm-analysis-area .card-body h3 { font-size: 1.25rem; margin-top: 1rem; }
     </style>
 </head>
 <body>
@@ -49,6 +50,7 @@
             </div>
         </div>
 
+        <div id="llm-analysis-area" class="mb-4"></div>
         <div id="analysis-result-area" class="mb-4"></div>
         <div id="graph-area" class="mb-4"></div>
         <div id="model-info-area" class="mb-4"></div>
@@ -114,7 +116,7 @@
         </div>
     </div>
 
-
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
@@ -123,6 +125,7 @@
         const modelSelect = document.getElementById('model-select');
         const analyzeBtn = document.getElementById('analyze-btn');
         const analysisResultArea = document.getElementById('analysis-result-area');
+        const llmAnalysisArea = document.getElementById('llm-analysis-area');
         const graphArea = document.getElementById('graph-area');
         const modelInfoArea = document.getElementById('model-info-area');
         const controls = document.getElementById('generator-controls');
@@ -293,7 +296,7 @@
 
             analyzeBtn.disabled = true;
             generationOptions = {};
-            [analysisResultArea, graphArea, modelInfoArea, tokenEstimationArea].forEach(el => {
+            [analysisResultArea, llmAnalysisArea, graphArea, modelInfoArea, tokenEstimationArea].forEach(el => {
                 el.style.display = 'none';
                 el.innerHTML = '';
             });
@@ -374,15 +377,15 @@
                 alert('모델을 먼저 선택해주세요.'); return;
             }
             
-            [analysisResultArea, graphArea, modelInfoArea].forEach(el => {
+            [analysisResultArea, llmAnalysisArea, graphArea, modelInfoArea].forEach(el => {
                 el.style.display = 'none';
                 el.innerHTML = '';
             });
 
-            analysisResultArea.style.display = 'block';
-            analysisResultArea.innerHTML = `<div class="text-center"><div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div> 분석 중...</div>`;
+            const spinnerHtml = `<div class="text-center"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div><p class="mt-2">AI가 모델을 분석 중입니다...</p></div>`;
+            llmAnalysisArea.innerHTML = spinnerHtml;
+            llmAnalysisArea.style.display = 'block';
             
-            await generateAndRenderGraph(currentModel);
             renderModelStructure(currentModel);
 
             try {
@@ -390,7 +393,26 @@
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.error || '분석 중 오류가 발생했습니다.');
 
-                let resultHtml = `<div class="card"><div class="card-header"><strong>의존성 분석 결과</strong></div><div class="card-body">`;
+                // Render LLM-based analysis
+                if (result.llm_analysis) {
+                    const llmCard = document.createElement('div');
+                    llmCard.className = 'card';
+                    llmCard.innerHTML = `
+                        <div class="card-header">
+                            <strong><i class="bi bi-robot"></i> AI 모델 분석 및 생성 전략</strong>
+                        </div>
+                        <div class="card-body">
+                            ${marked.parse(result.llm_analysis)}
+                        </div>
+                    `;
+                    llmAnalysisArea.innerHTML = ''; // Clear spinner
+                    llmAnalysisArea.appendChild(llmCard);
+                } else {
+                    llmAnalysisArea.style.display = 'none';
+                }
+
+                // Render Rule-based analysis
+                let resultHtml = `<div class="card"><div class="card-header"><strong>규칙 기반 의존성 분석</strong></div><div class="card-body">`;
                 if (result.generation_order) {
                     const orderHtml = result.generation_order.map(name => `<span class="badge bg-primary">${name}</span>`).join(' <i class="bi bi-arrow-right"></i> ');
                     resultHtml += `<h6>데이터 생성 순서</h6><p>${orderHtml}</p><hr>`;
@@ -406,8 +428,13 @@
                 }
                 resultHtml += '</div></div>';
                 analysisResultArea.innerHTML = resultHtml;
+                analysisResultArea.style.display = 'block';
+
+                await generateAndRenderGraph(currentModel);
+
+
             } catch (error) {
-                analysisResultArea.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+                llmAnalysisArea.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
             }
         });
         

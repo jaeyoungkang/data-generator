@@ -47,12 +47,33 @@ def get_model(filename):
 @app.route('/analyze-dependencies/<filename>')
 def analyze_dependencies_route(filename):
     filepath = os.path.join(MODELS_DIR, filename)
-    if not os.path.exists(filepath): return jsonify({"error": "모델 파일을 찾을 수 없습니다."}), 404
-    with open(filepath, 'r', encoding='utf-8') as f: model = json.load(f)
+    if not os.path.exists(filepath):
+        return jsonify({"error": "모델 파일을 찾을 수 없습니다."}), 404
+        
+    with open(filepath, 'r', encoding='utf-8') as f:
+        model_str = f.read()
+        model = json.loads(model_str)
+
+    # Rule-based analysis
     generation_order = da.get_generation_order(model)
-    if generation_order is None: return jsonify({"error": "모델에 순환 참조가 발견되었습니다. 모델을 수정해주세요."}), 400
+    if generation_order is None:
+        return jsonify({"error": "모델에 순환 참조가 발견되었습니다. 모델을 수정해주세요."}), 400
     dependencies, _ = da.analyze_dependencies(model)
-    return jsonify({"generation_order": generation_order, "dependencies": dependencies})
+
+    # LLM-based analysis
+    llm_analysis_result = gemini_service.get_model_analysis_and_strategy(model_str)
+    
+    llm_analysis = ""
+    if llm_analysis_result.get('status') == 'ok':
+        llm_analysis = llm_analysis_result.get('analysis', "AI 분석을 생성하지 못했습니다.")
+    else:
+        llm_analysis = f"AI 분석 중 오류 발생: {llm_analysis_result.get('message')}"
+
+    return jsonify({
+        "generation_order": generation_order,
+        "dependencies": dependencies,
+        "llm_analysis": llm_analysis
+    })
 
 @app.route('/api-status')
 def api_status():
@@ -109,7 +130,23 @@ def estimate_tokens():
     filepath = os.path.join(MODELS_DIR, filename)
     if not os.path.exists(filepath): return jsonify({"error": "Model file not found."}), 404
 
-    with open(filepath, 'r', encoding='utf-8') as f: model = json.load(f)
+    with open(filepath, 'r', encoding='utf-8') as f:
+        model_str = f.read()
+        model = json.loads(model_str)
+
+    # Get model analysis to use as context
+    llm_analysis_result = gemini_service.get_model_analysis_and_strategy(model_str)
+    model_analysis_text = ""
+    if llm_analysis_result.get('status') == 'ok':
+        model_analysis_text = llm_analysis_result.get('analysis', "")
+
+    context_prompt = ""
+    if model_analysis_text:
+        context_prompt = (
+            "Here is an overall analysis of the data model I'm working with. "
+            "Use this context to generate more realistic and consistent data.\n\n"
+            f"--- Model Analysis ---\n{model_analysis_text}\n---------------------\n\n"
+        )
 
     AVG_RESPONSE_TOKENS_PER_ITEM = 10 
     total_llm_rows_for_candidates = 0
@@ -123,7 +160,8 @@ def estimate_tokens():
         for column in table.get('columns', []):
             if '[LLM]' in column.get('description', ''):
                 prompt = (
-                    f"Generate {num_rows} unique and realistic examples for a column named '{column.get('column_name')}' in a table. "
+                    f"{context_prompt}"
+                    f"Based on the context above, generate {num_rows} unique and realistic examples for a column named '{column.get('column_name')}' in a table. "
                     f"The column's purpose is: '{column.get('description')}'.\n"
                     "Please provide the output as a single JSON array of strings. For example: [\"value1\", \"value2\", ...]\n"
                     "Do not include any other text or explanation in your response. Only the JSON array."
@@ -192,13 +230,21 @@ def start_generation():
     filepath = os.path.join(MODELS_DIR, filename)
     if not os.path.exists(filepath): return "Error: Model file not found.", 404
     
-    with open(filepath, 'r', encoding='utf-8') as f: model = json.load(f)
+    with open(filepath, 'r', encoding='utf-8') as f:
+        model_str = f.read()
+        model = json.loads(model_str)
     
     generation_order = da.get_generation_order(model)
     if generation_order is None:
         def error_stream():
             yield log_streamer(event_type="error", data={"message": "모델에 순환 참조가 발견되었습니다."})
         return Response(stream_with_context(error_stream()), mimetype='text/event-stream')
+    
+    # Get model analysis to use as context
+    llm_analysis_result = gemini_service.get_model_analysis_and_strategy(model_str)
+    model_analysis_text = ""
+    if llm_analysis_result.get('status') == 'ok':
+        model_analysis_text = llm_analysis_result.get('analysis', "")
 
     model_tables_map = {t['table_name']: t for t in model.get('tables', [])}
     quantities = request.args.to_dict(flat=True)
@@ -227,7 +273,12 @@ def start_generation():
 
             yield log_streamer(event_type="log", data={'message': f"-> **{table_name}** ({num_rows}개) 생성 시작..."})
             
-            df, prompt_tokens, candidates_tokens = dg.generate_table_data(table_name, columns_list, num_rows, related_data=generated_data_dfs, options=options)
+            df, prompt_tokens, candidates_tokens = dg.generate_table_data(
+                table_name, columns_list, num_rows, 
+                related_data=generated_data_dfs, 
+                options=options,
+                model_analysis=model_analysis_text # Pass analysis context
+            )
             total_prompt_tokens += prompt_tokens
             total_candidates_tokens += candidates_tokens
 
