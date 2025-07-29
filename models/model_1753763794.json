@@ -1,0 +1,109 @@
+{
+    "tables": [
+        {
+            "table_name": "users",
+            "columns": [
+                {
+                    "column_name": "user_id",
+                    "data_type": "INT",
+                    "description": "고유 사용자 ID"
+                },
+                {
+                    "column_name": "name",
+                    "data_type": "VARCHAR(255)",
+                    "description": "사용자 이름"
+                },
+                {
+                    "column_name": "email",
+                    "data_type": "VARCHAR(255)",
+                    "description": "사용자 이메일"
+                },
+                {
+                    "column_name": "created_at",
+                    "data_type": "TIMESTAMP",
+                    "description": "사용자 생성일시"
+                }
+            ]
+        },
+        {
+            "table_name": "products",
+            "columns": [
+                {
+                    "column_name": "product_id",
+                    "data_type": "INT",
+                    "description": "고유 상품 ID"
+                },
+                {
+                    "column_name": "product_name",
+                    "data_type": "VARCHAR(255)",
+                    "description": "상품 이름"
+                },
+                {
+                    "column_name": "price",
+                    "data_type": "DECIMAL(10, 2)",
+                    "description": "상품 가격"
+                },
+                {
+                    "column_name": "category",
+                    "data_type": "VARCHAR(100)",
+                    "description": "상품 카테고리"
+                }
+            ]
+        },
+        {
+            "table_name": "orders",
+            "columns": [
+                {
+                    "column_name": "order_id",
+                    "data_type": "INT",
+                    "description": "고유 주문 ID"
+                },
+                {
+                    "column_name": "user_id",
+                    "data_type": "INT",
+                    "description": "주문을 한 사용자 ID"
+                },
+                {
+                    "column_name": "order_date",
+                    "data_type": "TIMESTAMP",
+                    "description": "주문일시"
+                },
+                {
+                    "column_name": "total_amount",
+                    "data_type": "DECIMAL(10, 2)",
+                    "description": "주문 총 금액"
+                }
+            ]
+        },
+        {
+            "table_name": "order_items",
+            "columns": [
+                {
+                    "column_name": "order_item_id",
+                    "data_type": "INT",
+                    "description": "고유 주문 상세 ID"
+                },
+                {
+                    "column_name": "order_id",
+                    "data_type": "INT",
+                    "description": "주문 ID"
+                },
+                {
+                    "column_name": "product_id",
+                    "data_type": "INT",
+                    "description": "주문한 상품 ID"
+                },
+                {
+                    "column_name": "quantity",
+                    "data_type": "INT",
+                    "description": "주문 수량"
+                },
+                {
+                    "column_name": "price",
+                    "data_type": "DECIMAL(10, 2)",
+                    "description": "주문 시점의 상품 가격"
+                }
+            ]
+        }
+    ]
+}
