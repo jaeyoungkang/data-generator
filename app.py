@@ -99,6 +99,50 @@ def chat():
         yield f"data: {json.dumps({'type': 'end_stream'})}\n\n"
     return Response(stream_with_context(stream_response()), mimetype='text/event-stream')
 
+@app.route('/estimate-tokens', methods=['POST'])
+def estimate_tokens():
+    data = request.json
+    filename = data.get('filename')
+    quantities = data.get('quantities', {})
+    
+    if not filename: return jsonify({"error": "Filename is required."}), 400
+    filepath = os.path.join(MODELS_DIR, filename)
+    if not os.path.exists(filepath): return jsonify({"error": "Model file not found."}), 404
+
+    with open(filepath, 'r', encoding='utf-8') as f: model = json.load(f)
+
+    AVG_RESPONSE_TOKENS_PER_ITEM = 10 
+    total_llm_rows_for_candidates = 0
+    total_estimated_prompt_tokens = 0
+
+    for table in model.get('tables', []):
+        table_name = table.get('table_name')
+        num_rows = int(quantities.get(table_name, 0))
+        if num_rows == 0: continue
+
+        for column in table.get('columns', []):
+            if '[LLM]' in column.get('description', ''):
+                prompt = (
+                    f"Generate {num_rows} unique and realistic examples for a column named '{column.get('column_name')}' in a table. "
+                    f"The column's purpose is: '{column.get('description')}'.\n"
+                    "Please provide the output as a single JSON array of strings. For example: [\"value1\", \"value2\", ...]\n"
+                    "Do not include any other text or explanation in your response. Only the JSON array."
+                )
+                result = gemini_service.count_tokens(prompt)
+                if result.get('status') == 'ok':
+                    total_estimated_prompt_tokens += result.get('total_tokens', 0)
+                
+                total_llm_rows_for_candidates += num_rows
+
+    if total_estimated_prompt_tokens == 0:
+        return jsonify({"estimated_prompt_tokens": 0, "estimated_candidates_tokens": 0})
+        
+    estimated_candidates_tokens = total_llm_rows_for_candidates * AVG_RESPONSE_TOKENS_PER_ITEM
+
+    return jsonify({
+        "estimated_prompt_tokens": total_estimated_prompt_tokens, 
+        "estimated_candidates_tokens": estimated_candidates_tokens
+    })
 
 @app.route('/generate-sample', methods=['POST'])
 def generate_sample():
@@ -118,7 +162,7 @@ def generate_sample():
 
     model_tables_map = {t['table_name']: t for t in model.get('tables', [])}
     sample_size = 5
-    sample_data = {} # [수정] HTML 대신 JSON 데이터를 담을 딕셔너리
+    sample_data = {}
     generated_data_dfs = {}
 
     for table_name in generation_order:
@@ -128,9 +172,9 @@ def generate_sample():
         columns_list = table_details.get("columns", [])
         num_rows = int(quantities.get(table_name, sample_size))
         
-        df = dg.generate_table_data(table_name, columns_list, min(num_rows, sample_size), related_data=generated_data_dfs, options=options)
+        df, _, _ = dg.generate_table_data(table_name, columns_list, min(num_rows, sample_size), related_data=generated_data_dfs, options=options)
+        
         generated_data_dfs[table_name] = df
-        # [수정] DataFrame을 to_html() 대신 to_json(orient='records')로 변환
         sample_data[table_name] = json.loads(df.to_json(orient='records'))
         
     return jsonify(sample_data)
@@ -153,16 +197,24 @@ def start_generation():
     generation_order = da.get_generation_order(model)
     if generation_order is None:
         def error_stream():
-            yield log_streamer("모델에 순환 참조가 발견되었습니다.", event_type="error")
+            yield log_streamer(event_type="error", data={"message": "모델에 순환 참조가 발견되었습니다."})
         return Response(stream_with_context(error_stream()), mimetype='text/event-stream')
 
     model_tables_map = {t['table_name']: t for t in model.get('tables', [])}
     quantities = request.args.to_dict(flat=True)
     
+    def log_streamer(event_type, data):
+        data['type'] = event_type
+        return f"data: {json.dumps(data)}\n\n"
+
     def generate_and_log():
         if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
         generated_data_dfs = {}
-        
+        total_prompt_tokens = 0
+        total_candidates_tokens = 0
+
+        yield log_streamer(event_type="token_update", data={'prompt_tokens': 0, 'candidates_tokens': 0})
+
         for table_name in generation_order:
             table_details = model_tables_map.get(table_name)
             if not table_details: continue
@@ -170,21 +222,34 @@ def start_generation():
             columns_list = table_details.get("columns", [])
             num_rows = int(quantities.get(table_name, 0))
             if num_rows == 0:
-                yield log_streamer(f"-> **{table_name}** (0개) 건너뜁니다.", event_type="log")
+                yield log_streamer(event_type="log", data={'message': f"-> **{table_name}** (0개) 건너뜁니다."})
                 continue
 
-            yield log_streamer(f"-> **{table_name}** ({num_rows}개) 생성 시작...", event_type="log")
+            yield log_streamer(event_type="log", data={'message': f"-> **{table_name}** ({num_rows}개) 생성 시작..."})
             
-            df = dg.generate_table_data(table_name, columns_list, num_rows, related_data=generated_data_dfs, options=options)
+            df, prompt_tokens, candidates_tokens = dg.generate_table_data(table_name, columns_list, num_rows, related_data=generated_data_dfs, options=options)
+            total_prompt_tokens += prompt_tokens
+            total_candidates_tokens += candidates_tokens
+
             file_path = os.path.join(OUTPUT_DIR, f'{table_name}.csv')
             df.to_csv(file_path, index=False, encoding='utf-8-sig')
             generated_data_dfs[table_name] = df
-            yield log_streamer(f"   '{table_name}.csv' 저장 완료.", event_type="log")
+            
+            log_message = f"   '{table_name}.csv' 저장 완료."
+            if (prompt_tokens + candidates_tokens) > 0:
+                log_message += f" (입력: {prompt_tokens}, 출력: {candidates_tokens})"
+            yield log_streamer(event_type="log", data={'message': log_message})
+            
+            yield log_streamer(event_type="token_update", data={'prompt_tokens': total_prompt_tokens, 'candidates_tokens': total_candidates_tokens})
+            
             time.sleep(0.5)
-        yield log_streamer(f"✅ 모든 데이터 생성이 완료되었습니다!", event_type="complete")
-
-    def log_streamer(message, event_type="log"):
-        return f"data: {json.dumps({'type': event_type, 'message': message})}\n\n"
+        
+        completion_message = "✅ 모든 데이터 생성이 완료되었습니다!"
+        yield log_streamer(event_type="complete", data={
+            'message': completion_message, 
+            'prompt_tokens': total_prompt_tokens,
+            'candidates_tokens': total_candidates_tokens
+        })
 
     return Response(stream_with_context(generate_and_log()), mimetype='text/event-stream')
 

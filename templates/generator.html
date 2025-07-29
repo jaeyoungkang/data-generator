@@ -9,15 +9,16 @@
         .table-responsive { max-height: 300px; }
         #log-container { display: none; max-height: 400px; overflow-y: auto; font-family: monospace; background-color:#212529; color: #f8f9fa; }
         #generator-controls, #model-info-area, #graph-area, #analysis-result-area { display: none; }
+        #token-estimation-area, #token-usage-area { display: none; }
 
         #model-info-area .table th,
         #model-info-area .table td,
-        #sample-area .table th, /* [수정] 샘플 테이블 스타일 추가 */
+        #sample-area .table th,
         #sample-area .table td {
             vertical-align: middle;
         }
         #model-info-area .table th,
-        #sample-area .table th { /* [수정] 샘플 테이블 헤더 스타일 추가 */
+        #sample-area .table th {
              background-color: #f8f9fa; 
         }
         .mermaid { text-align: center; margin-bottom: 1rem; }
@@ -25,6 +26,7 @@
         #analysis-result-area .bi-arrow-right { vertical-align: middle; margin: 0 0.5rem; }
         
         #generation-options-modal .form-label { font-weight: 500; }
+        .token-card { flex: 1; }
     </style>
 </head>
 <body>
@@ -60,10 +62,29 @@
                     <div class="row g-3" id="quantity-form"></div>
                 </div>
             </div>
+            
+            <div id="token-estimation-area" class="alert alert-info my-3" role="alert"></div>
+            
+            <div id="token-usage-area" class="d-flex gap-3 my-3">
+                <div class="card token-card">
+                    <div class="card-body text-center">
+                        <h6 class="card-title mb-1 text-muted">입력(Prompt) 토큰</h6>
+                        <p class="card-text display-6 fw-bold text-primary" id="live-prompt-token-count">0</p>
+                    </div>
+                </div>
+                <div class="card token-card">
+                    <div class="card-body text-center">
+                        <h6 class="card-title mb-1 text-muted">출력(Response) 토큰</h6>
+                        <p class="card-text display-6 fw-bold text-info" id="live-candidates-token-count">0</p>
+                    </div>
+                </div>
+            </div>
+
 
             <div class="d-grid gap-2 d-md-flex justify-content-md-end mb-4">
                 <button class="btn btn-info" id="sample-btn">샘플 보기</button>
-                <button class="btn btn-success" id="generate-btn">전체 데이터 생성</button>
+                <button class="btn btn-primary" id="estimate-btn">예상 토큰 계산</button>
+                <button class="btn btn-success" id="generate-btn" disabled>전체 데이터 생성</button>
             </div>
 
             <div id="sample-area"></div>
@@ -108,7 +129,12 @@
         const quantityForm = document.getElementById('quantity-form');
         const sampleArea = document.getElementById('sample-area');
         const sampleBtn = document.getElementById('sample-btn');
+        const estimateBtn = document.getElementById('estimate-btn');
         const generateBtn = document.getElementById('generate-btn');
+        const tokenEstimationArea = document.getElementById('token-estimation-area');
+        const tokenUsageArea = document.getElementById('token-usage-area');
+        const livePromptTokenCount = document.getElementById('live-prompt-token-count');
+        const liveCandidatesTokenCount = document.getElementById('live-candidates-token-count');
         const optionsModal = new bootstrap.Modal(document.getElementById('generation-options-modal'));
         const modalForm = document.getElementById('modal-options-form');
 
@@ -267,12 +293,19 @@
 
             analyzeBtn.disabled = true;
             generationOptions = {};
-            [analysisResultArea, graphArea, modelInfoArea].forEach(el => {
+            [analysisResultArea, graphArea, modelInfoArea, tokenEstimationArea].forEach(el => {
                 el.style.display = 'none';
                 el.innerHTML = '';
             });
+            tokenUsageArea.style.display = 'none';
+            livePromptTokenCount.textContent = '0';
+            liveCandidatesTokenCount.textContent = '0';
             quantityForm.innerHTML = '';
             sampleArea.innerHTML = '';
+            
+            estimateBtn.disabled = false;
+            generateBtn.disabled = true;
+            generateBtn.textContent = '전체 데이터 생성';
 
             try {
                 const response = await fetch(`/get-model/${filename}`);
@@ -384,7 +417,7 @@
             sampleBtn.disabled = true;
             sampleBtn.textContent = '샘플 생성 중...';
             
-            sampleArea.innerHTML = ''; // [수정] 기존 샘플 영역 초기화
+            sampleArea.innerHTML = '';
 
             const quantities = {};
             quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
@@ -402,7 +435,6 @@
             });
             const sampleDataByTable = await response.json();
 
-            // [수정] JSON 데이터를 받아 동적으로 테이블 생성
             for (const tableName in sampleDataByTable) {
                 const records = sampleDataByTable[tableName];
                 if (!records || records.length === 0) continue;
@@ -448,14 +480,69 @@
             sampleBtn.disabled = false;
             sampleBtn.textContent = '샘플 보기';
         });
+        
+        estimateBtn.addEventListener('click', async () => {
+            const selectedModel = modelSelect.value;
+            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
+
+            estimateBtn.disabled = true;
+            estimateBtn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 계산 중...`;
+            tokenEstimationArea.style.display = 'block';
+            tokenEstimationArea.className = 'alert alert-info my-3';
+            tokenEstimationArea.textContent = '예상 토큰 사용량을 계산 중입니다...';
+            generateBtn.disabled = true;
+
+            const quantities = {};
+            quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
+                quantities[input.dataset.tableName] = input.value;
+            });
+
+            try {
+                const response = await fetch('/estimate-tokens', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: selectedModel, quantities: quantities })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '계산에 실패했습니다.');
+                
+                const promptTokens = result.estimated_prompt_tokens ?? 0;
+                const candidatesTokens = result.estimated_candidates_tokens ?? 0;
+
+                tokenEstimationArea.innerHTML = `
+                    <i class="bi bi-cpu"></i> <strong>예상 토큰 사용량</strong>
+                    <ul class="mb-0">
+                        <li>입력(Prompt): ~${promptTokens.toLocaleString()} tokens</li>
+                        <li>출력(Response): ~${candidatesTokens.toLocaleString()} tokens</li>
+                    </ul>
+                    <p class="mb-0 small mt-2">일괄 요청 방식으로 계산되어 실제 사용량과 유사합니다.</p>
+                `;
+                generateBtn.disabled = false;
+
+            } catch (error) {
+                tokenEstimationArea.className = 'alert alert-danger my-3';
+                tokenEstimationArea.textContent = `오류: ${error.message}`;
+            } finally {
+                estimateBtn.disabled = false;
+                estimateBtn.innerHTML = '예상 토큰 계산';
+            }
+        });
 
         generateBtn.addEventListener('click', () => {
             const selectedModel = modelSelect.value;
             if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
+            
             generateBtn.disabled = true;
+            estimateBtn.disabled = true;
+            
+            tokenUsageArea.style.display = 'flex';
+            livePromptTokenCount.textContent = '0';
+            liveCandidatesTokenCount.textContent = '0';
+            
             const logContainer = document.getElementById('log-container');
             logContainer.style.display = 'block';
             logContainer.innerHTML = '✅ 데이터 생성 스트림 시작...\n';
+            
             const quantities = {};
             quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
                 quantities[input.dataset.tableName] = input.value;
@@ -467,14 +554,52 @@
             
             const eventSource = new EventSource(`/start-generation?${params.toString()}`);
             eventSource.onmessage = function (event) {
-                const logEntry = JSON.parse(event.data);
-                logContainer.innerHTML += `${logEntry.message.replace(/</g, "&lt;").replace(/>/g, "&gt;")}\n`;
-                logContainer.scrollTop = logContainer.scrollHeight;
-                if (logEntry.type === 'complete') {
-                    eventSource.close();
-                    generateBtn.textContent = '생성 완료!';
+                const data = JSON.parse(event.data);
+                
+                switch (data.type) {
+                    case 'log': {
+                        const formattedMessage = data.message
+                            .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                        logContainer.innerHTML += `${formattedMessage}\n`;
+                        break;
+                    }
+                    case 'token_update': {
+                        livePromptTokenCount.textContent = (data.prompt_tokens ?? 0).toLocaleString();
+                        liveCandidatesTokenCount.textContent = (data.candidates_tokens ?? 0).toLocaleString();
+                        break;
+                    }
+                    case 'complete': {
+                        const finalPromptTokens = data.prompt_tokens ?? 0;
+                        const finalCandidatesTokens = data.candidates_tokens ?? 0;
+
+                        livePromptTokenCount.textContent = finalPromptTokens.toLocaleString();
+                        liveCandidatesTokenCount.textContent = finalCandidatesTokens.toLocaleString();
+                        
+                        const completeMessage = data.message
+                            .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                        
+                        logContainer.innerHTML += `<div class="alert alert-success mt-2 p-2">
+                            ${completeMessage}<br>
+                            <strong>최종 사용 토큰:</strong> 입력 ${finalPromptTokens.toLocaleString()}, 출력 ${finalCandidatesTokens.toLocaleString()}
+                        </div>`;
+                        
+                        eventSource.close();
+                        generateBtn.textContent = '생성 완료!';
+                        estimateBtn.disabled = false;
+                        break;
+                    }
                 }
+                logContainer.scrollTop = logContainer.scrollHeight;
             };
+
+            eventSource.onerror = function() {
+                logContainer.innerHTML += '<p class="text-danger">스트림 연결에 오류가 발생했습니다. 서버 로그를 확인하세요.</p>';
+                eventSource.close();
+                generateBtn.disabled = false;
+                estimateBtn.disabled = false;
+            }
         });
 
     </script>

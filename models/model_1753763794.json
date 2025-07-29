@@ -36,7 +36,7 @@
                 {
                     "column_name": "product_name",
                     "data_type": "VARCHAR(255)",
-                    "description": "상품 이름"
+                    "description": "상품 이름 [LLM]"
                 },
                 {
                     "column_name": "price",

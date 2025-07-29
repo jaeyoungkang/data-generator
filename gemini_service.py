@@ -25,7 +25,7 @@ if not api_key:
 else:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        'gemini-2.5-flash-lite',
+        'gemini-1.5-flash',
         system_instruction=SYSTEM_PROMPT
     )
 
@@ -41,7 +41,48 @@ def check_api_connection():
             return {"status": "error", "message": "API 키가 유효하지 않습니다. 키를 확인해주세요."}
         return {"status": "error", "message": f"API 연결 실패: {error_message}"}
 
-# --- [신규] 스트리밍 응답을 위한 함수 ---
+def count_tokens(contents):
+    """주어진 텍스트 목록의 총 토큰 수를 계산합니다."""
+    if not model:
+        return {"status": "error", "message": "API model not initialized."}
+    try:
+        if isinstance(contents, str):
+            contents = [contents]
+        response = model.count_tokens(contents)
+        return {"status": "ok", "total_tokens": response.total_tokens}
+    except Exception as e:
+        print(f"Error counting tokens: {e}")
+        return {"status": "error", "message": str(e)}
+
+def generate_content_with_usage(prompt):
+    """Gemini API를 호출하고, 결과와 함께 입력/출력 토큰 사용량을 반환합니다."""
+    if not model:
+        return {"status": "error", "message": "API model not initialized."}
+    try:
+        response = model.generate_content(prompt)
+        usage = response.usage_metadata
+        
+        # Safety-check for blocked responses
+        if not response.candidates:
+            return {
+                "status": "blocked", 
+                "text": "Safety settings blocked the response.",
+                "prompt_tokens": usage.prompt_token_count if usage else 0,
+                "candidates_tokens": 0,
+                "total_tokens": usage.prompt_token_count if usage else 0
+            }
+        
+        return {
+            "status": "ok",
+            "text": response.text,
+            "prompt_tokens": usage.prompt_token_count,
+            "candidates_tokens": usage.candidates_token_count,
+            "total_tokens": usage.total_token_count
+        }
+    except Exception as e:
+        print(f"Error calling Gemini API: {e}")
+        return {"status": "error", "message": str(e)}
+
 def get_gemini_response_stream(chat_history):
     """Gemini API에서 응답을 스트리밍으로 받아옵니다."""
     if not model:
@@ -54,10 +95,8 @@ def get_gemini_response_stream(chat_history):
         messages_for_api.append({"role": role, "parts": [msg["text"]]})
 
     try:
-        # stream=True로 설정하여 스트리밍 응답을 요청
         response_stream = model.generate_content(messages_for_api, stream=True)
         for chunk in response_stream:
-            # 각 chunk의 텍스트 부분을 yield
             yield chunk.text
     except Exception as e:
         print(f"Error calling Gemini API: {e}")
