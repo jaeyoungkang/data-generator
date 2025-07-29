@@ -4,10 +4,27 @@
     <meta charset="UTF-8">
     <title>데이터 생성기</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
     <style>
         .table-responsive { max-height: 300px; }
         #log-container { display: none; max-height: 400px; overflow-y: auto; font-family: monospace; background-color:#212529; color: #f8f9fa; }
-        #generator-controls { display: none; } /* [신규] 컨트롤 영역은 모델 선택 후 표시 */
+        #generator-controls, #model-info-area, #graph-area, #analysis-result-area { display: none; }
+
+        #model-info-area .table th,
+        #model-info-area .table td,
+        #sample-area .table th, /* [수정] 샘플 테이블 스타일 추가 */
+        #sample-area .table td {
+            vertical-align: middle;
+        }
+        #model-info-area .table th,
+        #sample-area .table th { /* [수정] 샘플 테이블 헤더 스타일 추가 */
+             background-color: #f8f9fa; 
+        }
+        .mermaid { text-align: center; margin-bottom: 1rem; }
+        #analysis-result-area .badge { font-size: 1em; padding: 0.5em 0.7em; vertical-align: middle; }
+        #analysis-result-area .bi-arrow-right { vertical-align: middle; margin: 0 0.5rem; }
+        
+        #generation-options-modal .form-label { font-weight: 500; }
     </style>
 </head>
 <body>
@@ -19,22 +36,28 @@
        
         <div class="mb-4">
             <label for="model-select" class="form-label"><strong>1. 생성할 데이터 모델 선택</strong></label>
-            <select class="form-select" id="model-select">
-                <option selected disabled>저장된 모델을 선택하세요...</option>
-                {% for filename in model_files %}
-                <option value="{{ filename }}">{{ filename }}</option>
-                {% endfor %}
-            </select>
+            <div class="input-group">
+                <select class="form-select" id="model-select">
+                    <option selected disabled>저장된 모델을 선택하세요...</option>
+                    {% for filename in model_files %}
+                    <option value="{{ filename }}">{{ filename }}</option>
+                    {% endfor %}
+                </select>
+                <button class="btn btn-outline-secondary" type="button" id="analyze-btn" disabled>모델 상세정보 및 분석</button>
+            </div>
         </div>
+
+        <div id="analysis-result-area" class="mb-4"></div>
+        <div id="graph-area" class="mb-4"></div>
+        <div id="model-info-area" class="mb-4"></div>
 
         <div id="generator-controls">
             <div class="card mb-4">
                 <div class="card-header">
-                    2. 데이터 생성 수량 입력
+                    <strong>2. 데이터 생성 수량 입력</strong>
                 </div>
                 <div class="card-body">
-                    <div class="row g-3" id="quantity-form">
-                        </div>
+                    <div class="row g-3" id="quantity-form"></div>
                 </div>
             </div>
 
@@ -43,129 +66,417 @@
                 <button class="btn btn-success" id="generate-btn">전체 데이터 생성</button>
             </div>
 
-            <div id="sample-area">
-                </div>
+            <div id="sample-area"></div>
         </div>
         
         <div class="form-control mt-3" id="log-container"></div>
     </div>
 
+    <div class="modal fade" id="generation-options-modal" tabindex="-1" aria-labelledby="optionsModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="optionsModalLabel">컬럼 생성 옵션 설정</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p><strong>테이블:</strong> <span id="modal-table-name"></span><br>
+                       <strong>컬럼:</strong> <span id="modal-column-name"></span></p>
+                    <hr>
+                    <div id="modal-options-form"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+                    <button type="button" class="btn btn-primary" id="save-options-btn">설정 저장</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
+        mermaid.initialize({ startOnLoad: false });
+
         const modelSelect = document.getElementById('model-select');
+        const analyzeBtn = document.getElementById('analyze-btn');
+        const analysisResultArea = document.getElementById('analysis-result-area');
+        const graphArea = document.getElementById('graph-area');
+        const modelInfoArea = document.getElementById('model-info-area');
         const controls = document.getElementById('generator-controls');
         const quantityForm = document.getElementById('quantity-form');
         const sampleArea = document.getElementById('sample-area');
         const sampleBtn = document.getElementById('sample-btn');
         const generateBtn = document.getElementById('generate-btn');
+        const optionsModal = new bootstrap.Modal(document.getElementById('generation-options-modal'));
+        const modalForm = document.getElementById('modal-options-form');
 
-        // [수정] 모델 선택 이벤트 리스너
+        let currentModel = {};
+        let generationOptions = {};
+
+        function generateSampleValue(column) {
+            const colName = (column.column_name || '').toLowerCase();
+            const dataType = (column.data_type || '').toLowerCase();
+            if (colName.includes('id')) return '1';
+            if (colName.includes('name') || colName.includes('이름')) return '홍길동';
+            if (colName.includes('email') || colName.includes('이메일')) return 'sample@example.com';
+            if (colName.includes('date') || colName.includes('created_at') || dataType.includes('timestamp')) return new Date().toISOString().split('T')[0];
+            if (colName.includes('price') || colName.includes('amount') || dataType.includes('decimal')) return '10000.00';
+            if (colName.includes('quantity') || dataType.includes('int')) return '1';
+            if (colName.includes('category')) return '샘플 카테고리';
+            if (colName.includes('status')) return 'completed';
+            if (colName.includes('description') || colName.includes('comment')) return '이것은 샘플 설명 텍스트입니다.';
+            return '샘플 텍스트';
+        }
+
+        async function generateAndRenderGraph(model) {
+            graphArea.innerHTML = '';
+            if (!model.tables || !Array.isArray(model.tables)) {
+                graphArea.style.display = 'none'; return;
+            }
+            const tableNames = model.tables.map(t => t.table_name);
+            let graphDefinition = 'graph TD;\n';
+            tableNames.forEach(name => { graphDefinition += `    ${name}[${name}];\n`; });
+            model.tables.forEach(table => {
+                const sourceTable = table.table_name;
+                if (table.columns && Array.isArray(table.columns)) {
+                    table.columns.forEach(column => {
+                        const colName = column.column_name;
+                        if (colName.endsWith('_id') && colName !== `${sourceTable}_id` && colName !== `${sourceTable.slice(0, -1)}_id`) {
+                            const targetTablePrefix = colName.replace('_id', '');
+                            const targetTable = tableNames.find(name => name === targetTablePrefix || name === `${targetTablePrefix}s`);
+                            if (targetTable && sourceTable !== targetTable) {
+                                graphDefinition += `    ${sourceTable} -- "${colName}" --> ${targetTable};\n`;
+                            }
+                        }
+                    });
+                }
+            });
+            const graphCard = document.createElement('div');
+            graphCard.className = 'card';
+            graphCard.innerHTML = `<div class="card-header"><strong>테이블 관계도</strong></div><div class="card-body"><div class="mermaid">${graphDefinition}</div></div>`;
+            graphArea.appendChild(graphCard);
+            graphArea.style.display = 'block';
+            await mermaid.run({ nodes: graphArea.querySelectorAll('.mermaid') });
+        }
+        
+        function renderModelStructure(model) {
+            modelInfoArea.innerHTML = '';
+            if (!model.tables || !Array.isArray(model.tables)) {
+                modelInfoArea.style.display = 'none';
+                return;
+            }
+            const modelCard = document.createElement('div');
+            modelCard.className = 'card';
+            modelCard.innerHTML = `<div class="card-header"><strong>선택된 모델 구조 및 생성 옵션</strong></div>`;
+            const modelCardBody = document.createElement('div');
+            modelCardBody.className = 'card-body';
+            model.tables.forEach(tableDetails => {
+                const tableName = tableDetails.table_name;
+                if (!tableName) return;
+                
+                const tableTitle = document.createElement('h6');
+                tableTitle.className = 'mt-3 mb-2';
+                tableTitle.textContent = `테이블: ${tableName}`;
+                modelCardBody.appendChild(tableTitle);
+
+                const tableEl = document.createElement('table');
+                tableEl.className = 'table table-bordered table-sm';
+                tableEl.innerHTML = `<thead class="table-light"><tr><th>컬럼명</th><th>타입</th><th>설명</th><th>샘플</th><th>옵션</th></tr></thead><tbody></tbody>`;
+                const tbody = tableEl.querySelector('tbody');
+                
+                tableDetails.columns.forEach(column => {
+                    const colName = column.column_name;
+                    const sampleValue = generateSampleValue(column);
+                    const row = tbody.insertRow();
+                    row.innerHTML = `
+                        <td>${colName || ''}</td>
+                        <td>${column.data_type || ''}</td>
+                        <td>${column.description || ''}</td>
+                        <td><em>${sampleValue}</em></td>
+                        <td><button class="btn btn-sm btn-outline-primary options-btn" data-table-name="${tableName}" data-column-name="${colName}">설정</button></td>`;
+                });
+                modelCardBody.appendChild(tableEl);
+            });
+            modelCard.appendChild(modelCardBody);
+            modelInfoArea.appendChild(modelCard);
+            modelInfoArea.style.display = 'block';
+        }
+
+        function openOptionsModal(tableName, columnName) {
+            const table = currentModel.tables.find(t => t.table_name === tableName);
+            const column = table.columns.find(c => c.column_name === columnName);
+            const dataType = (column.data_type || '').toLowerCase();
+            const currentOptions = generationOptions[tableName]?.[columnName] || {};
+
+            document.getElementById('modal-table-name').textContent = tableName;
+            document.getElementById('modal-column-name').textContent = columnName;
+            document.getElementById('save-options-btn').dataset.tableName = tableName;
+            document.getElementById('save-options-btn').dataset.columnName = columnName;
+
+            let formHtml = '';
+            if (dataType.includes('int') || dataType.includes('decimal')) {
+                formHtml = `
+                    <div class="mb-3">
+                        <label for="option-min" class="form-label">최솟값</label>
+                        <input type="number" class="form-control" id="option-min" value="${currentOptions.min || ''}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="option-max" class="form-label">최댓값</label>
+                        <input type="number" class="form-control" id="option-max" value="${currentOptions.max || ''}">
+                    </div>`;
+            } else if (dataType.includes('varchar') || dataType.includes('text')) {
+                formHtml = `
+                    <div class="mb-3">
+                        <label for="option-type" class="form-label">특정 형식</label>
+                        <select class="form-select" id="option-type">
+                            <option value="">자동(추론)</option>
+                            <option value="name" ${currentOptions.type === 'name' ? 'selected' : ''}>이름</option>
+                            <option value="email" ${currentOptions.type === 'email' ? 'selected' : ''}>이메일</option>
+                            <option value="address" ${currentOptions.type === 'address' ? 'selected' : ''}>주소</option>
+                            <option value="company" ${currentOptions.type === 'company' ? 'selected' : ''}>회사명</option>
+                            <option value="phone" ${currentOptions.type === 'phone' ? 'selected' : ''}>전화번호</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="option-list" class="form-label">선택 목록 (쉼표로 구분)</label>
+                        <textarea class="form-control" id="option-list" rows="3" placeholder="예: 완료,배송중,취소">${(currentOptions.list || []).join(',')}</textarea>
+                        <div class="form-text">목록을 입력하면 위 특정 형식보다 우선 적용됩니다.</div>
+                    </div>`;
+            } else if (dataType.includes('date') || dataType.includes('timestamp')) {
+                 formHtml = `
+                    <div class="mb-3">
+                        <label for="option-start-date" class="form-label">시작일</label>
+                        <input type="date" class="form-control" id="option-start-date" value="${currentOptions.startDate || ''}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="option-end-date" class="form-label">종료일</label>
+                        <input type="date" class="form-control" id="option-end-date" value="${currentOptions.endDate || ''}">
+                    </div>`;
+            } else {
+                formHtml = '<p>이 데이터 타입에 대한 사용자 정의 옵션이 없습니다.</p>';
+            }
+            modalForm.innerHTML = formHtml;
+            optionsModal.show();
+        }
+
         modelSelect.addEventListener('change', async (event) => {
             const filename = event.target.value;
             if (!filename) return;
 
-            // API를 통해 선택된 모델의 상세 정보 가져오기
-            const response = await fetch(`/get-model/${filename}`);
-            const model = await response.json();
-
-            // 기존 내용 초기화
+            analyzeBtn.disabled = true;
+            generationOptions = {};
+            [analysisResultArea, graphArea, modelInfoArea].forEach(el => {
+                el.style.display = 'none';
+                el.innerHTML = '';
+            });
             quantityForm.innerHTML = '';
             sampleArea.innerHTML = '';
 
-            // 수량 입력 필드 및 샘플 영역 동적 생성
-            for (const table in model) {
-                // 수량 입력 필드
-                const qtyCol = document.createElement('div');
-                qtyCol.className = 'col-md-4';
-                qtyCol.innerHTML = `
-                    <label for="qty-${table}" class="form-label"><strong>${table}</strong></label>
-                    <input type="number" class="form-control" id="qty-${table}" value="100" data-table-name="${table}">
-                `;
-                quantityForm.appendChild(qtyCol);
+            try {
+                const response = await fetch(`/get-model/${filename}`);
+                if (!response.ok) throw new Error('모델 파일을 불러오는 데 실패했습니다.');
+                
+                currentModel = await response.json();
+                
+                if (currentModel.tables && Array.isArray(currentModel.tables)) {
+                    currentModel.tables.forEach(tableDetails => {
+                        const tableName = tableDetails.table_name;
+                        if (!tableName) return;
+                        
+                        const qtyCol = document.createElement('div');
+                        qtyCol.className = 'col-md-4';
+                        qtyCol.innerHTML = `<label for="qty-${tableName}" class="form-label">${tableName}</label><input type="number" class="form-control" id="qty-${tableName}" value="100" data-table-name="${tableName}">`;
+                        quantityForm.appendChild(qtyCol);
+                    });
+                } else {
+                    quantityForm.innerHTML = '<p class="text-muted">선택된 모델에 테이블 정보가 없습니다.</p>';
+                }
+                
+                analyzeBtn.disabled = false;
 
-                // 샘플 테이블 영역
-                const sampleCard = document.createElement('div');
-                sampleCard.className = 'card mb-3';
-                sampleCard.id = `card-${table}`;
-                sampleCard.style.display = 'none';
-                sampleCard.innerHTML = `
-                    <div class="card-header">${table} 샘플 데이터</div>
-                    <div class="card-body">
-                        <div class="table-responsive" id="sample-${table}"></div>
-                    </div>
-                `;
-                sampleArea.appendChild(sampleCard);
+            } catch (error) {
+                console.error('모델 처리 중 오류 발생:', error);
+                analysisResultArea.innerHTML = `<div class="alert alert-danger">모델을 불러오는 중 오류가 발생했습니다: ${error.message}</div>`;
+                analysisResultArea.style.display = 'block';
             }
             
-            // 컨트롤 영역 표시
             controls.style.display = 'block';
         });
+        
+        modelInfoArea.addEventListener('click', (event) => {
+            if (event.target.classList.contains('options-btn')) {
+                const { tableName, columnName } = event.target.dataset;
+                openOptionsModal(tableName, columnName);
+            }
+        });
 
-        function getQuantities() {
+        document.getElementById('save-options-btn').addEventListener('click', () => {
+            const { tableName, columnName } = document.getElementById('save-options-btn').dataset;
+            if (!generationOptions[tableName]) {
+                generationOptions[tableName] = {};
+            }
+            const options = {};
+            const minEl = document.getElementById('option-min');
+            if (minEl && minEl.value) options.min = parseFloat(minEl.value);
+            const maxEl = document.getElementById('option-max');
+            if (maxEl && maxEl.value) options.max = parseFloat(maxEl.value);
+            const typeEl = document.getElementById('option-type');
+            if (typeEl && typeEl.value) options.type = typeEl.value;
+            const listEl = document.getElementById('option-list');
+            if (listEl && listEl.value) options.list = listEl.value.split(',').map(s => s.trim()).filter(Boolean);
+            const startDateEl = document.getElementById('option-start-date');
+            if (startDateEl && startDateEl.value) options.startDate = startDateEl.value;
+            const endDateEl = document.getElementById('option-end-date');
+            if (endDateEl && endDateEl.value) options.endDate = endDateEl.value;
+
+            generationOptions[tableName][columnName] = options;
+            optionsModal.hide();
+        });
+
+        analyzeBtn.addEventListener('click', async () => {
+            const selectedModel = modelSelect.value;
+            if (!selectedModel) {
+                alert('모델을 먼저 선택해주세요.'); return;
+            }
+            
+            [analysisResultArea, graphArea, modelInfoArea].forEach(el => {
+                el.style.display = 'none';
+                el.innerHTML = '';
+            });
+
+            analysisResultArea.style.display = 'block';
+            analysisResultArea.innerHTML = `<div class="text-center"><div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div> 분석 중...</div>`;
+            
+            await generateAndRenderGraph(currentModel);
+            renderModelStructure(currentModel);
+
+            try {
+                const response = await fetch(`/analyze-dependencies/${selectedModel}`);
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '분석 중 오류가 발생했습니다.');
+
+                let resultHtml = `<div class="card"><div class="card-header"><strong>의존성 분석 결과</strong></div><div class="card-body">`;
+                if (result.generation_order) {
+                    const orderHtml = result.generation_order.map(name => `<span class="badge bg-primary">${name}</span>`).join(' <i class="bi bi-arrow-right"></i> ');
+                    resultHtml += `<h6>데이터 생성 순서</h6><p>${orderHtml}</p><hr>`;
+                }
+                if (result.dependencies && Object.keys(result.dependencies).length > 0) {
+                    resultHtml += '<h6>테이블별 의존성 (A는 B에 의존)</h6><ul>';
+                    for (const table in result.dependencies) {
+                        resultHtml += `<li><strong>${table}</strong> &rarr; [${result.dependencies[table].join(', ')}]</li>`;
+                    }
+                    resultHtml += '</ul>';
+                } else {
+                    resultHtml += '<p>테이블 간 직접적인 의존성이 발견되지 않았습니다.</p>';
+                }
+                resultHtml += '</div></div>';
+                analysisResultArea.innerHTML = resultHtml;
+            } catch (error) {
+                analysisResultArea.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+            }
+        });
+        
+        sampleBtn.addEventListener('click', async () => {
+            const selectedModel = modelSelect.value;
+            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
+            sampleBtn.disabled = true;
+            sampleBtn.textContent = '샘플 생성 중...';
+            
+            sampleArea.innerHTML = ''; // [수정] 기존 샘플 영역 초기화
+
             const quantities = {};
             quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
                 quantities[input.dataset.tableName] = input.value;
             });
-            return quantities;
-        }
 
-        sampleBtn.addEventListener('click', async () => {
-            const selectedModel = modelSelect.value;
-            if (!selectedModel) {
-                alert('모델을 먼저 선택해주세요.');
-                return;
-            }
-            sampleBtn.disabled = true;
-            sampleBtn.textContent = '샘플 생성 중...';
-
-            const quantities = getQuantities();
-            
             const response = await fetch('/generate-sample', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename: selectedModel, quantities: quantities })
+                body: JSON.stringify({ 
+                    filename: selectedModel, 
+                    quantities: quantities,
+                    options: generationOptions
+                })
             });
-            const sampleData = await response.json();
+            const sampleDataByTable = await response.json();
 
-            for (const table in sampleData) {
-                const card = document.getElementById(`card-${table}`);
-                const sampleDiv = document.getElementById(`sample-${table}`);
-                if(sampleDiv && card) {
-                    sampleDiv.innerHTML = sampleData[table];
-                    card.style.display = 'block';
-                }
+            // [수정] JSON 데이터를 받아 동적으로 테이블 생성
+            for (const tableName in sampleDataByTable) {
+                const records = sampleDataByTable[tableName];
+                if (!records || records.length === 0) continue;
+
+                const card = document.createElement('div');
+                card.className = 'card mb-3';
+                card.innerHTML = `<div class="card-header">${tableName} 샘플 데이터</div>`;
+                
+                const cardBody = document.createElement('div');
+                cardBody.className = 'card-body';
+
+                const tableResponsive = document.createElement('div');
+                tableResponsive.className = 'table-responsive';
+                
+                const tableEl = document.createElement('table');
+                tableEl.className = 'table table-bordered table-sm';
+
+                const thead = tableEl.createTHead();
+                thead.className = 'table-light';
+                const headerRow = thead.insertRow();
+                const columns = Object.keys(records[0]);
+                columns.forEach(colName => {
+                    const th = document.createElement('th');
+                    th.textContent = colName;
+                    headerRow.appendChild(th);
+                });
+
+                const tbody = tableEl.createTBody();
+                records.forEach(record => {
+                    const row = tbody.insertRow();
+                    columns.forEach(colName => {
+                        const cell = row.insertCell();
+                        cell.textContent = record[colName];
+                    });
+                });
+
+                tableResponsive.appendChild(tableEl);
+                cardBody.appendChild(tableResponsive);
+                card.appendChild(cardBody);
+                sampleArea.appendChild(card);
             }
-            
+
             sampleBtn.disabled = false;
             sampleBtn.textContent = '샘플 보기';
         });
 
         generateBtn.addEventListener('click', () => {
             const selectedModel = modelSelect.value;
-            if (!selectedModel) {
-                alert('모델을 먼저 선택해주세요.');
-                return;
-            }
+            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
             generateBtn.disabled = true;
             const logContainer = document.getElementById('log-container');
             logContainer.style.display = 'block';
             logContainer.innerHTML = '✅ 데이터 생성 스트림 시작...\n';
-
-            const quantities = getQuantities();
-            quantities.filename = selectedModel; // 쿼리에 파일명 추가
-            const queryParams = new URLSearchParams(quantities).toString();
-
-            const eventSource = new EventSource(`/start-generation?${queryParams}`);
+            const quantities = {};
+            quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
+                quantities[input.dataset.tableName] = input.value;
+            });
+            
+            const params = new URLSearchParams(quantities);
+            params.append('filename', selectedModel);
+            params.append('options', JSON.stringify(generationOptions));
+            
+            const eventSource = new EventSource(`/start-generation?${params.toString()}`);
             eventSource.onmessage = function (event) {
                 const logEntry = JSON.parse(event.data);
                 logContainer.innerHTML += `${logEntry.message.replace(/</g, "&lt;").replace(/>/g, "&gt;")}\n`;
                 logContainer.scrollTop = logContainer.scrollHeight;
-
                 if (logEntry.type === 'complete') {
                     eventSource.close();
                     generateBtn.textContent = '생성 완료!';
                 }
             };
         });
+
     </script>
 </body>
 </html>
