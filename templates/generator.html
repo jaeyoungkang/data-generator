@@ -19,7 +19,7 @@
         }
         #model-info-area .table th,
         #sample-area .table th {
-             background-color: #f8f9fa; 
+            background-color: #f8f9fa; 
         }
         .mermaid { text-align: center; margin-bottom: 1rem; }
         #analysis-result-area .badge { font-size: 1em; padding: 0.5em 0.7em; vertical-align: middle; }
@@ -28,15 +28,45 @@
         #generation-options-modal .form-label { font-weight: 500; }
         .token-card { flex: 1; }
         #llm-analysis-area .card-body h3 { font-size: 1.25rem; margin-top: 1rem; }
+        
+        /* 개선: 로딩 상태 스타일 */
+        .loading-overlay {
+            position: relative;
+            opacity: 0.7;
+            pointer-events: none;
+        }
+        
+        .loading-spinner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+        
+        .timeout-warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        
+        .analysis-timeout {
+            background-color: #f8d7da;
+            border: 1px solid #f5c2c7;
+            color: #842029;
+        }
     </style>
 </head>
 <body>
     <div class="container mt-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
-             <h1 class="h3">데이터 생성기</h1>
-             <a href="/" class="btn btn-sm btn-outline-secondary">시작 페이지로</a>
+            <h1 class="h3">데이터 생성기</h1>
+            <a href="/" class="btn btn-sm btn-outline-secondary">시작 페이지로</a>
         </div>
-       
+        
         <div class="mb-4">
             <label for="model-select" class="form-label"><strong>1. 생성할 데이터 모델 선택</strong></label>
             <div class="input-group">
@@ -46,7 +76,9 @@
                     <option value="{{ filename }}">{{ filename }}</option>
                     {% endfor %}
                 </select>
-                <button class="btn btn-outline-secondary" type="button" id="analyze-btn" disabled>모델 상세정보 및 분석</button>
+                <button class="btn btn-outline-secondary" type="button" id="analyze-btn" disabled>
+                    <i class="bi bi-graph-up"></i> 모델 상세정보 및 분석
+                </button>
             </div>
         </div>
 
@@ -81,7 +113,6 @@
                     </div>
                 </div>
             </div>
-
 
             <div class="d-grid gap-2 d-md-flex justify-content-md-end mb-4">
                 <button class="btn btn-info" id="sample-btn">샘플 보기</button>
@@ -122,6 +153,7 @@
     <script>
         mermaid.initialize({ startOnLoad: false });
 
+        // DOM Element References
         const modelSelect = document.getElementById('model-select');
         const analyzeBtn = document.getElementById('analyze-btn');
         const analysisResultArea = document.getElementById('analysis-result-area');
@@ -140,9 +172,14 @@
         const liveCandidatesTokenCount = document.getElementById('live-candidates-token-count');
         const optionsModal = new bootstrap.Modal(document.getElementById('generation-options-modal'));
         const modalForm = document.getElementById('modal-options-form');
+        const logContainer = document.getElementById('log-container');
 
+        // Global State
         let currentModel = {};
         let generationOptions = {};
+        let analysisTimeout = null;
+
+        // --- Function Definitions ---
 
         function generateSampleValue(column) {
             const colName = (column.column_name || '').toLowerCase();
@@ -290,10 +327,13 @@
             optionsModal.show();
         }
 
+        // --- Event Listeners ---
+
         modelSelect.addEventListener('change', async (event) => {
             const filename = event.target.value;
             if (!filename) return;
 
+            // Reset UI
             analyzeBtn.disabled = true;
             generationOptions = {};
             [analysisResultArea, llmAnalysisArea, graphArea, modelInfoArea, tokenEstimationArea].forEach(el => {
@@ -331,7 +371,6 @@
                 }
                 
                 analyzeBtn.disabled = false;
-
             } catch (error) {
                 console.error('모델 처리 중 오류 발생:', error);
                 analysisResultArea.innerHTML = `<div class="alert alert-danger">모델을 불러오는 중 오류가 발생했습니다: ${error.message}</div>`;
@@ -339,6 +378,414 @@
             }
             
             controls.style.display = 'block';
+        });
+        
+        analyzeBtn.addEventListener('click', async () => {
+            const selectedModel = modelSelect.value;
+            if (!selectedModel) {
+                alert('모델을 먼저 선택해주세요.'); 
+                return;
+            }
+            
+            // Reset previous analysis results
+            [analysisResultArea, llmAnalysisArea, graphArea, modelInfoArea].forEach(el => {
+                el.style.display = 'none';
+                el.innerHTML = '';
+            });
+
+            // Show loading indicators
+            analyzeBtn.disabled = true;
+            analyzeBtn.innerHTML = `
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                분석 중...
+            `;
+
+            const loadingHtml = `
+                <div class="card">
+                    <div class="card-header">
+                        <strong><i class="bi bi-robot"></i> AI 모델 분석 및 생성 전략</strong>
+                    </div>
+                    <div class="card-body text-center">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">분석 중...</span>
+                        </div>
+                        <p class="mt-3 mb-1">AI가 모델을 분석하고 있습니다...</p>
+                        <small class="text-muted">최대 35초 소요될 수 있습니다.</small>
+                        <div class="timeout-warning mt-3" style="display: none;">
+                            <i class="bi bi-clock"></i> 
+                            <strong>분석이 오래 걸리고 있습니다.</strong><br>
+                            복잡한 모델일수록 시간이 더 걸릴 수 있습니다.
+                        </div>
+                    </div>
+                </div>
+            `;
+            llmAnalysisArea.innerHTML = loadingHtml;
+            llmAnalysisArea.style.display = 'block';
+
+            // Show timeout warning after 15 seconds
+            const timeoutWarning = setTimeout(() => {
+                const warningEl = llmAnalysisArea.querySelector('.timeout-warning');
+                if (warningEl) {
+                    warningEl.style.display = 'block';
+                }
+            }, 15000);
+
+            // Render basic model structure immediately for fast feedback
+            renderModelStructure(currentModel);
+
+            try {
+                // API call with timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 35000); // 35s timeout
+
+                const response = await fetch(`/analyze-dependencies/${selectedModel}`, {
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                clearTimeout(timeoutWarning);
+
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(result.error || '분석 중 오류가 발생했습니다.');
+                }
+
+                // Render LLM analysis result
+                if (result.llm_analysis) {
+                    const llmCard = document.createElement('div');
+                    llmCard.className = 'card';
+                    llmCard.innerHTML = `
+                        <div class="card-header">
+                            <strong><i class="bi bi-robot"></i> AI 모델 분석 및 생성 전략</strong>
+                        </div>
+                        <div class="card-body">
+                            ${marked.parse(result.llm_analysis)}
+                        </div>
+                    `;
+                    llmAnalysisArea.innerHTML = '';
+                    llmAnalysisArea.appendChild(llmCard);
+                } else {
+                    llmAnalysisArea.innerHTML = `
+                        <div class="card">
+                            <div class="card-header">
+                                <strong><i class="bi bi-info-circle"></i> AI 분석</strong>
+                            </div>
+                            <div class="card-body">
+                                <p class="text-muted">AI 분석이 완료되지 않았지만, 규칙 기반 분석은 정상적으로 수행되었습니다.</p>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // Render rule-based analysis result
+                let resultHtml = `
+                    <div class="card">
+                        <div class="card-header">
+                            <strong><i class="bi bi-diagram-3"></i> 규칙 기반 의존성 분석</strong>
+                        </div>
+                        <div class="card-body">
+                `;
+                
+                if (result.generation_order) {
+                    const orderHtml = result.generation_order
+                        .map(name => `<span class="badge bg-primary">${name}</span>`)
+                        .join(' <i class="bi bi-arrow-right"></i> ');
+                    resultHtml += `
+                        <h6><i class="bi bi-list-ol"></i> 데이터 생성 순서</h6>
+                        <p>${orderHtml}</p>
+                        <hr>
+                    `;
+                }
+                
+                if (result.dependencies && Object.keys(result.dependencies).length > 0) {
+                    resultHtml += '<h6><i class="bi bi-arrow-down-up"></i> 테이블별 의존성</h6><ul>';
+                    for (const table in result.dependencies) {
+                        resultHtml += `<li><strong>${table}</strong> → [${result.dependencies[table].join(', ')}]</li>`;
+                    }
+                    resultHtml += '</ul>';
+                } else {
+                    resultHtml += '<p><i class="bi bi-check-circle text-success"></i> 테이블 간 직접적인 의존성이 발견되지 않았습니다.</p>';
+                }
+                
+                resultHtml += '</div></div>';
+                analysisResultArea.innerHTML = resultHtml;
+                analysisResultArea.style.display = 'block';
+
+                // Render relationship graph
+                await generateAndRenderGraph(currentModel);
+
+            } catch (error) {
+                clearTimeout(timeoutWarning);
+                
+                let errorMessage = error.message;
+                let errorClass = 'alert-danger';
+                
+                if (error.name === 'AbortError') {
+                    errorMessage = '분석 시간이 35초를 초과하여 중단되었습니다. 모델이 너무 복잡하거나 서버 응답이 느릴 수 있습니다.';
+                    errorClass = 'analysis-timeout alert';
+                } else if (errorMessage.includes('timeout')) {
+                    errorMessage = '서버 응답 시간이 초과되었습니다. 잠시 후 다시 시도해보세요.';
+                    errorClass = 'analysis-timeout alert';
+                }
+
+                llmAnalysisArea.innerHTML = `
+                    <div class="${errorClass}" role="alert">
+                        <h6><i class="bi bi-exclamation-triangle"></i> 분석 실패</h6>
+                        <p class="mb-0">${errorMessage}</p>
+                        ${errorClass.includes('timeout') ? 
+                            '<small class="d-block mt-2">💡 <strong>팁:</strong> 테이블 수를 줄이거나 더 간단한 모델로 시도해보세요.</small>' : 
+                            ''
+                        }
+                    </div>
+                `;
+                
+                // Show basic analysis even on failure
+                renderModelStructure(currentModel);
+                await generateAndRenderGraph(currentModel);
+                
+            } finally {
+                // Restore button state
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerHTML = `<i class="bi bi-graph-up"></i> 모델 상세정보 및 분석`;
+            }
+        });
+        
+        estimateBtn.addEventListener('click', async () => {
+            const selectedModel = modelSelect.value;
+            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
+
+            estimateBtn.disabled = true;
+            estimateBtn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 계산 중...`;
+            tokenEstimationArea.style.display = 'block';
+            tokenEstimationArea.className = 'alert alert-info my-3';
+            tokenEstimationArea.textContent = '예상 토큰 사용량을 계산 중입니다...';
+            generateBtn.disabled = true;
+
+            const quantities = {};
+            quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
+                quantities[input.dataset.tableName] = input.value;
+            });
+
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+
+                const response = await fetch('/estimate-tokens', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: selectedModel, quantities: quantities }),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '계산에 실패했습니다.');
+                
+                const promptTokens = result.estimated_prompt_tokens ?? 0;
+                const candidatesTokens = result.estimated_candidates_tokens ?? 0;
+
+                tokenEstimationArea.innerHTML = `
+                    <i class="bi bi-cpu"></i> <strong>예상 토큰 사용량</strong>
+                    <ul class="mb-0">
+                        <li>입력(Prompt): ~${promptTokens.toLocaleString()} tokens</li>
+                        <li>출력(Response): ~${candidatesTokens.toLocaleString()} tokens</li>
+                    </ul>
+                    <p class="mb-0 small mt-2">일괄 요청 방식으로 계산되어 실제 사용량과 유사합니다.</p>
+                `;
+                generateBtn.disabled = false;
+
+            } catch (error) {
+                let errorMessage = error.message;
+                if (error.name === 'AbortError') {
+                    errorMessage = '토큰 계산 시간이 초과되었습니다. 다시 시도해보세요.';
+                }
+                tokenEstimationArea.className = 'alert alert-danger my-3';
+                tokenEstimationArea.textContent = `오류: ${errorMessage}`;
+            } finally {
+                estimateBtn.disabled = false;
+                estimateBtn.innerHTML = '예상 토큰 계산';
+            }
+        });
+
+        generateBtn.addEventListener('click', () => {
+            const selectedModel = modelSelect.value;
+            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
+            
+            generateBtn.disabled = true;
+            estimateBtn.disabled = true;
+            
+            tokenUsageArea.style.display = 'flex';
+            livePromptTokenCount.textContent = '0';
+            liveCandidatesTokenCount.textContent = '0';
+            
+            logContainer.style.display = 'block';
+            logContainer.innerHTML = '✅ 데이터 생성 스트림 시작...\n';
+            
+            const quantities = {};
+            quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
+                quantities[input.dataset.tableName] = input.value;
+            });
+            
+            const params = new URLSearchParams(quantities);
+            params.append('filename', selectedModel);
+            params.append('options', JSON.stringify(generationOptions));
+            
+            const eventSource = new EventSource(`/start-generation?${params.toString()}`);
+            
+            const connectionTimeout = setTimeout(() => {
+                if (eventSource.readyState === EventSource.CONNECTING) {
+                    eventSource.close();
+                    logContainer.innerHTML += '<p class="text-danger">서버 연결 시간이 초과되었습니다. 페이지를 새로고침하고 다시 시도해주세요.</p>';
+                    generateBtn.disabled = false;
+                    estimateBtn.disabled = false;
+                }
+            }, 15000); // 15s connection timeout
+            
+            eventSource.onopen = function() {
+                clearTimeout(connectionTimeout);
+            };
+            
+            eventSource.onmessage = function (event) {
+                const data = JSON.parse(event.data);
+                
+                switch (data.type) {
+                    case 'log': {
+                        const formattedMessage = data.message
+                            .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                        logContainer.innerHTML += `${formattedMessage}\n`;
+                        break;
+                    }
+                    case 'token_update': {
+                        livePromptTokenCount.textContent = (data.prompt_tokens ?? 0).toLocaleString();
+                        liveCandidatesTokenCount.textContent = (data.candidates_tokens ?? 0).toLocaleString();
+                        break;
+                    }
+                    case 'complete': {
+                        clearTimeout(connectionTimeout);
+                        const finalPromptTokens = data.prompt_tokens ?? 0;
+                        const finalCandidatesTokens = data.candidates_tokens ?? 0;
+
+                        livePromptTokenCount.textContent = finalPromptTokens.toLocaleString();
+                        liveCandidatesTokenCount.textContent = finalCandidatesTokens.toLocaleString();
+                        
+                        const completeMessage = data.message
+                            .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                        
+                        logContainer.innerHTML += `<div class="alert alert-success mt-2 p-2">
+                            ${completeMessage}<br>
+                            <strong>최종 사용 토큰:</strong> 입력 ${finalPromptTokens.toLocaleString()}, 출력 ${finalCandidatesTokens.toLocaleString()}
+                        </div>`;
+                        
+                        eventSource.close();
+                        generateBtn.textContent = '생성 완료!';
+                        estimateBtn.disabled = false;
+                        break;
+                    }
+                    case 'error': {
+                        clearTimeout(connectionTimeout);
+                        logContainer.innerHTML += `<div class="alert alert-danger mt-2 p-2">
+                            <strong>오류:</strong> ${data.message}
+                        </div>`;
+                        eventSource.close();
+                        generateBtn.disabled = false;
+                        estimateBtn.disabled = false;
+                        break;
+                    }
+                }
+                logContainer.scrollTop = logContainer.scrollHeight;
+            };
+
+            eventSource.onerror = function(event) {
+                clearTimeout(connectionTimeout);
+                logContainer.innerHTML += '<p class="text-danger">스트림 연결에 오류가 발생했습니다. 서버 상태를 확인하세요.</p>';
+                eventSource.close();
+                generateBtn.disabled = false;
+                estimateBtn.disabled = false;
+            };
+        });
+
+        sampleBtn.addEventListener('click', async () => {
+            const selectedModel = modelSelect.value;
+            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
+            sampleBtn.disabled = true;
+            sampleBtn.textContent = '샘플 생성 중...';
+            
+            sampleArea.innerHTML = '';
+
+            const quantities = {};
+            quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
+                quantities[input.dataset.tableName] = input.value;
+            });
+
+            try {
+                const response = await fetch('/generate-sample', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        filename: selectedModel, 
+                        quantities: quantities,
+                        options: generationOptions
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorResult = await response.json();
+                    throw new Error(errorResult.error || '샘플 생성에 실패했습니다.');
+                }
+                
+                const sampleDataByTable = await response.json();
+
+                for (const tableName in sampleDataByTable) {
+                    const records = sampleDataByTable[tableName];
+                    if (!records || records.length === 0) continue;
+
+                    const card = document.createElement('div');
+                    card.className = 'card mb-3';
+                    card.innerHTML = `<div class="card-header">${tableName} 샘플 데이터</div>`;
+                    
+                    const cardBody = document.createElement('div');
+                    cardBody.className = 'card-body';
+
+                    const tableResponsive = document.createElement('div');
+                    tableResponsive.className = 'table-responsive';
+                    
+                    const tableEl = document.createElement('table');
+                    tableEl.className = 'table table-bordered table-sm';
+
+                    const thead = tableEl.createTHead();
+                    thead.className = 'table-light';
+                    const headerRow = thead.insertRow();
+                    const columns = Object.keys(records[0]);
+                    columns.forEach(colName => {
+                        const th = document.createElement('th');
+                        th.textContent = colName;
+                        headerRow.appendChild(th);
+                    });
+
+                    const tbody = tableEl.createTBody();
+                    records.forEach(record => {
+                        const row = tbody.insertRow();
+                        columns.forEach(colName => {
+                            const cell = row.insertCell();
+                            cell.textContent = record[colName];
+                        });
+                    });
+
+                    tableResponsive.appendChild(tableEl);
+                    cardBody.appendChild(tableResponsive);
+                    card.appendChild(cardBody);
+                    sampleArea.appendChild(card);
+                }
+            } catch (error) {
+                sampleArea.innerHTML = `<div class="alert alert-danger">샘플 생성 중 오류가 발생했습니다: ${error.message}</div>`;
+            } finally {
+                sampleBtn.disabled = false;
+                sampleBtn.textContent = '샘플 보기';
+            }
         });
         
         modelInfoArea.addEventListener('click', (event) => {
@@ -369,264 +816,6 @@
 
             generationOptions[tableName][columnName] = options;
             optionsModal.hide();
-        });
-
-        analyzeBtn.addEventListener('click', async () => {
-            const selectedModel = modelSelect.value;
-            if (!selectedModel) {
-                alert('모델을 먼저 선택해주세요.'); return;
-            }
-            
-            [analysisResultArea, llmAnalysisArea, graphArea, modelInfoArea].forEach(el => {
-                el.style.display = 'none';
-                el.innerHTML = '';
-            });
-
-            const spinnerHtml = `<div class="text-center"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div><p class="mt-2">AI가 모델을 분석 중입니다...</p></div>`;
-            llmAnalysisArea.innerHTML = spinnerHtml;
-            llmAnalysisArea.style.display = 'block';
-            
-            renderModelStructure(currentModel);
-
-            try {
-                const response = await fetch(`/analyze-dependencies/${selectedModel}`);
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.error || '분석 중 오류가 발생했습니다.');
-
-                // Render LLM-based analysis
-                if (result.llm_analysis) {
-                    const llmCard = document.createElement('div');
-                    llmCard.className = 'card';
-                    llmCard.innerHTML = `
-                        <div class="card-header">
-                            <strong><i class="bi bi-robot"></i> AI 모델 분석 및 생성 전략</strong>
-                        </div>
-                        <div class="card-body">
-                            ${marked.parse(result.llm_analysis)}
-                        </div>
-                    `;
-                    llmAnalysisArea.innerHTML = ''; // Clear spinner
-                    llmAnalysisArea.appendChild(llmCard);
-                } else {
-                    llmAnalysisArea.style.display = 'none';
-                }
-
-                // Render Rule-based analysis
-                let resultHtml = `<div class="card"><div class="card-header"><strong>규칙 기반 의존성 분석</strong></div><div class="card-body">`;
-                if (result.generation_order) {
-                    const orderHtml = result.generation_order.map(name => `<span class="badge bg-primary">${name}</span>`).join(' <i class="bi bi-arrow-right"></i> ');
-                    resultHtml += `<h6>데이터 생성 순서</h6><p>${orderHtml}</p><hr>`;
-                }
-                if (result.dependencies && Object.keys(result.dependencies).length > 0) {
-                    resultHtml += '<h6>테이블별 의존성 (A는 B에 의존)</h6><ul>';
-                    for (const table in result.dependencies) {
-                        resultHtml += `<li><strong>${table}</strong> &rarr; [${result.dependencies[table].join(', ')}]</li>`;
-                    }
-                    resultHtml += '</ul>';
-                } else {
-                    resultHtml += '<p>테이블 간 직접적인 의존성이 발견되지 않았습니다.</p>';
-                }
-                resultHtml += '</div></div>';
-                analysisResultArea.innerHTML = resultHtml;
-                analysisResultArea.style.display = 'block';
-
-                await generateAndRenderGraph(currentModel);
-
-
-            } catch (error) {
-                llmAnalysisArea.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
-            }
-        });
-        
-        sampleBtn.addEventListener('click', async () => {
-            const selectedModel = modelSelect.value;
-            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
-            sampleBtn.disabled = true;
-            sampleBtn.textContent = '샘플 생성 중...';
-            
-            sampleArea.innerHTML = '';
-
-            const quantities = {};
-            quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
-                quantities[input.dataset.tableName] = input.value;
-            });
-
-            const response = await fetch('/generate-sample', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    filename: selectedModel, 
-                    quantities: quantities,
-                    options: generationOptions
-                })
-            });
-            const sampleDataByTable = await response.json();
-
-            for (const tableName in sampleDataByTable) {
-                const records = sampleDataByTable[tableName];
-                if (!records || records.length === 0) continue;
-
-                const card = document.createElement('div');
-                card.className = 'card mb-3';
-                card.innerHTML = `<div class="card-header">${tableName} 샘플 데이터</div>`;
-                
-                const cardBody = document.createElement('div');
-                cardBody.className = 'card-body';
-
-                const tableResponsive = document.createElement('div');
-                tableResponsive.className = 'table-responsive';
-                
-                const tableEl = document.createElement('table');
-                tableEl.className = 'table table-bordered table-sm';
-
-                const thead = tableEl.createTHead();
-                thead.className = 'table-light';
-                const headerRow = thead.insertRow();
-                const columns = Object.keys(records[0]);
-                columns.forEach(colName => {
-                    const th = document.createElement('th');
-                    th.textContent = colName;
-                    headerRow.appendChild(th);
-                });
-
-                const tbody = tableEl.createTBody();
-                records.forEach(record => {
-                    const row = tbody.insertRow();
-                    columns.forEach(colName => {
-                        const cell = row.insertCell();
-                        cell.textContent = record[colName];
-                    });
-                });
-
-                tableResponsive.appendChild(tableEl);
-                cardBody.appendChild(tableResponsive);
-                card.appendChild(cardBody);
-                sampleArea.appendChild(card);
-            }
-
-            sampleBtn.disabled = false;
-            sampleBtn.textContent = '샘플 보기';
-        });
-        
-        estimateBtn.addEventListener('click', async () => {
-            const selectedModel = modelSelect.value;
-            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
-
-            estimateBtn.disabled = true;
-            estimateBtn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 계산 중...`;
-            tokenEstimationArea.style.display = 'block';
-            tokenEstimationArea.className = 'alert alert-info my-3';
-            tokenEstimationArea.textContent = '예상 토큰 사용량을 계산 중입니다...';
-            generateBtn.disabled = true;
-
-            const quantities = {};
-            quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
-                quantities[input.dataset.tableName] = input.value;
-            });
-
-            try {
-                const response = await fetch('/estimate-tokens', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filename: selectedModel, quantities: quantities })
-                });
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.error || '계산에 실패했습니다.');
-                
-                const promptTokens = result.estimated_prompt_tokens ?? 0;
-                const candidatesTokens = result.estimated_candidates_tokens ?? 0;
-
-                tokenEstimationArea.innerHTML = `
-                    <i class="bi bi-cpu"></i> <strong>예상 토큰 사용량</strong>
-                    <ul class="mb-0">
-                        <li>입력(Prompt): ~${promptTokens.toLocaleString()} tokens</li>
-                        <li>출력(Response): ~${candidatesTokens.toLocaleString()} tokens</li>
-                    </ul>
-                    <p class="mb-0 small mt-2">일괄 요청 방식으로 계산되어 실제 사용량과 유사합니다.</p>
-                `;
-                generateBtn.disabled = false;
-
-            } catch (error) {
-                tokenEstimationArea.className = 'alert alert-danger my-3';
-                tokenEstimationArea.textContent = `오류: ${error.message}`;
-            } finally {
-                estimateBtn.disabled = false;
-                estimateBtn.innerHTML = '예상 토큰 계산';
-            }
-        });
-
-        generateBtn.addEventListener('click', () => {
-            const selectedModel = modelSelect.value;
-            if (!selectedModel) { alert('모델을 먼저 선택해주세요.'); return; }
-            
-            generateBtn.disabled = true;
-            estimateBtn.disabled = true;
-            
-            tokenUsageArea.style.display = 'flex';
-            livePromptTokenCount.textContent = '0';
-            liveCandidatesTokenCount.textContent = '0';
-            
-            const logContainer = document.getElementById('log-container');
-            logContainer.style.display = 'block';
-            logContainer.innerHTML = '✅ 데이터 생성 스트림 시작...\n';
-            
-            const quantities = {};
-            quantityForm.querySelectorAll('input[type="number"]').forEach(input => {
-                quantities[input.dataset.tableName] = input.value;
-            });
-            
-            const params = new URLSearchParams(quantities);
-            params.append('filename', selectedModel);
-            params.append('options', JSON.stringify(generationOptions));
-            
-            const eventSource = new EventSource(`/start-generation?${params.toString()}`);
-            eventSource.onmessage = function (event) {
-                const data = JSON.parse(event.data);
-                
-                switch (data.type) {
-                    case 'log': {
-                        const formattedMessage = data.message
-                            .replace(/</g, "&lt;").replace(/>/g, "&gt;")
-                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-                        logContainer.innerHTML += `${formattedMessage}\n`;
-                        break;
-                    }
-                    case 'token_update': {
-                        livePromptTokenCount.textContent = (data.prompt_tokens ?? 0).toLocaleString();
-                        liveCandidatesTokenCount.textContent = (data.candidates_tokens ?? 0).toLocaleString();
-                        break;
-                    }
-                    case 'complete': {
-                        const finalPromptTokens = data.prompt_tokens ?? 0;
-                        const finalCandidatesTokens = data.candidates_tokens ?? 0;
-
-                        livePromptTokenCount.textContent = finalPromptTokens.toLocaleString();
-                        liveCandidatesTokenCount.textContent = finalCandidatesTokens.toLocaleString();
-                        
-                        const completeMessage = data.message
-                            .replace(/</g, "&lt;").replace(/>/g, "&gt;")
-                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-                        
-                        logContainer.innerHTML += `<div class="alert alert-success mt-2 p-2">
-                            ${completeMessage}<br>
-                            <strong>최종 사용 토큰:</strong> 입력 ${finalPromptTokens.toLocaleString()}, 출력 ${finalCandidatesTokens.toLocaleString()}
-                        </div>`;
-                        
-                        eventSource.close();
-                        generateBtn.textContent = '생성 완료!';
-                        estimateBtn.disabled = false;
-                        break;
-                    }
-                }
-                logContainer.scrollTop = logContainer.scrollHeight;
-            };
-
-            eventSource.onerror = function() {
-                logContainer.innerHTML += '<p class="text-danger">스트림 연결에 오류가 발생했습니다. 서버 로그를 확인하세요.</p>';
-                eventSource.close();
-                generateBtn.disabled = false;
-                estimateBtn.disabled = false;
-            }
         });
 
     </script>

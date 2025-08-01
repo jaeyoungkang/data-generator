@@ -6,6 +6,7 @@ from datetime import datetime
 import gemini_service
 import json
 import re
+import time
 
 # Faker 인스턴스 생성 (한국어)
 fake = Faker('ko_KR')
@@ -74,10 +75,91 @@ def generate_faker_value(column_detail, table_name, related_data, options=None):
     
     return fake.word()
 
+def generate_llm_data_with_fallback(col_detail, num_rows, model_analysis="", max_retries=2):
+    """
+    LLM을 사용하여 데이터를 생성하되, 실패시 Faker로 대체하는 함수
+    """
+    col_name = col_detail.get('column_name')
+    col_desc = col_detail.get('description', '')
+    
+    # 간단한 프롬프트로 빠른 생성
+    context_prompt = ""
+    if model_analysis and len(model_analysis) < 1000:  # 컨텍스트가 너무 길지 않을 때만 사용
+        context_prompt = f"Context: {model_analysis[:500]}...\n\n"
+    
+    prompt = (
+        f"{context_prompt}"
+        f"Generate {num_rows} realistic examples for column '{col_name}': {col_desc}\n"
+        f"Return only a JSON array like: [\"value1\", \"value2\", ...]\n"
+        f"No explanations, just the array."
+    )
+    
+    for attempt in range(max_retries):
+        try:
+            result = gemini_service.generate_content_with_usage(prompt)
+            
+            if result.get('status') == 'ok' and result.get('text'):
+                # JSON 추출 시도
+                text = result['text'].strip()
+                
+                # 여러 패턴으로 JSON 추출 시도
+                json_patterns = [
+                    r'\[.*?\]',  # 기본 배열 패턴
+                    r'```json\s*(\[.*?\])\s*```',  # 코드 블록 내 배열
+                    r'```\s*(\[.*?\])\s*```',  # 코드 블록 (json 태그 없음)
+                ]
+                
+                parsed_values = None
+                for pattern in json_patterns:
+                    match = re.search(pattern, text, re.DOTALL)
+                    if match:
+                        json_str = match.group(1) if match.groups() else match.group(0)
+                        try:
+                            parsed_values = json.loads(json_str)
+                            if isinstance(parsed_values, list) and len(parsed_values) > 0:
+                                break
+                        except json.JSONDecodeError:
+                            continue
+                
+                if parsed_values and len(parsed_values) >= num_rows:
+                    return (
+                        parsed_values[:num_rows], 
+                        result.get('prompt_tokens', 0), 
+                        result.get('candidates_tokens', 0)
+                    )
+                elif parsed_values and len(parsed_values) > 0:
+                    # 부족한 개수는 반복으로 채우기
+                    while len(parsed_values) < num_rows:
+                        parsed_values.extend(parsed_values[:min(len(parsed_values), num_rows - len(parsed_values))])
+                    return (
+                        parsed_values[:num_rows], 
+                        result.get('prompt_tokens', 0), 
+                        result.get('candidates_tokens', 0)
+                    )
+                    
+            # LLM 응답이 없거나 파싱 실패시 재시도
+            if attempt < max_retries - 1:
+                time.sleep(1)  # 1초 대기 후 재시도
+                continue
+                
+        except Exception as e:
+            print(f"LLM 생성 시도 {attempt + 1} 실패: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2)  # 2초 대기 후 재시도
+                continue
+    
+    # 모든 시도 실패시 Faker로 대체
+    print(f"LLM 생성 실패, Faker로 대체: {col_name}")
+    fallback_values = []
+    for _ in range(num_rows):
+        fallback_value = generate_faker_value(col_detail, "fallback_table", {}, {})
+        fallback_values.append(str(fallback_value))
+    
+    return fallback_values, 0, 0  # 토큰 사용량 0
+
 def generate_table_data(table_name, columns_details, num_rows, related_data=None, options=None, model_analysis=""):
     """
-    LLM을 사용하는 컬럼은 일괄 요청하여 효율적으로 데이터를 생성합니다.
-    모델 분석 결과를 컨텍스트로 활용하여 데이터 품질을 높입니다.
+    개선된 테이블 데이터 생성 - LLM 실패시 안정적 대체
     """
     if related_data is None: related_data = {}
     if options is None: options = {}
@@ -85,9 +167,11 @@ def generate_table_data(table_name, columns_details, num_rows, related_data=None
     total_prompt_tokens = 0
     total_candidates_tokens = 0
     
+    # 컬럼을 LLM/Faker로 분류
     llm_columns = [c for c in columns_details if '[LLM]' in c.get('description', '')]
     faker_columns = [c for c in columns_details if '[LLM]' not in c.get('description', '')]
 
+    # 1. Faker 기반 컬럼 먼저 생성 (빠른 처리)
     data = []
     for i in range(1, num_rows + 1):
         row = {}
@@ -95,61 +179,63 @@ def generate_table_data(table_name, columns_details, num_rows, related_data=None
             col_name = col_detail.get('column_name')
             if not col_name: continue
             
+            # 기본 키 처리
             pk_col = f"{table_name.rstrip('s')}_id"
             if col_name == pk_col:
                 row[col_name] = i
             else:
                 col_options = options.get(table_name, {}).get(col_name, {})
-                row[col_name] = generate_faker_value(col_detail, table_name, related_data, col_options)
+                try:
+                    row[col_name] = generate_faker_value(col_detail, table_name, related_data, col_options)
+                except Exception as e:
+                    print(f"Faker 생성 실패 ({col_name}): {str(e)}")
+                    row[col_name] = f"ERROR_{i}"
         data.append(row)
 
     df = pd.DataFrame(data) if data else pd.DataFrame(columns=[c['column_name'] for c in faker_columns])
 
-    # Prepare context for LLM prompt
-    context_prompt = ""
-    if model_analysis:
-        context_prompt = (
-            "Here is an overall analysis of the data model I'm working with. "
-            "Use this context to generate more realistic and consistent data.\n\n"
-            f"--- Model Analysis ---\n{model_analysis}\n---------------------\n\n"
-        )
-
+    # 2. LLM 기반 컬럼 생성 (안정적 처리)
     for col_detail in llm_columns:
         col_name = col_detail.get('column_name')
-        col_desc = col_detail.get('description')
+        if not col_name: continue
         
-        prompt = (
-            f"{context_prompt}"
-            f"Based on the context above, generate {num_rows} unique and realistic examples for a column named '{col_name}' in a table. "
-            f"The column's purpose is: '{col_desc}'.\n"
-            "Please provide the output as a single JSON array of strings. For example: [\"value1\", \"value2\", ...]\n"
-            "Do not include any other text or explanation in your response. Only the JSON array."
-        )
+        print(f"LLM 컬럼 생성 중: {col_name}")
         
-        result = gemini_service.generate_content_with_usage(prompt)
-        
-        total_prompt_tokens += result.get('prompt_tokens', 0)
-        total_candidates_tokens += result.get('candidates_tokens', 0)
-        
-        generated_values = []
-        if result.get('status') == 'ok':
-            try:
-                match = re.search(r'\[.*\]', result['text'], re.DOTALL)
-                if match:
-                    generated_values = json.loads(match.group(0))
+        try:
+            generated_values, prompt_tokens, candidates_tokens = generate_llm_data_with_fallback(
+                col_detail, num_rows, model_analysis
+            )
+            
+            total_prompt_tokens += prompt_tokens
+            total_candidates_tokens += candidates_tokens
+            
+            # 생성된 값들을 DataFrame에 추가
+            if len(generated_values) == num_rows:
+                df[col_name] = generated_values
+            else:
+                # 길이가 맞지 않을 때 조정
+                if len(generated_values) > num_rows:
+                    df[col_name] = generated_values[:num_rows]
                 else:
-                    generated_values = [f"LLM_PARSE_ERROR"] * num_rows
-            except json.JSONDecodeError:
-                generated_values = [f"LLM_JSON_ERROR"] * num_rows
-        else:
-            generated_values = [f"LLM_API_ERROR: {result.get('message', 'Unknown')}" for _ in range(num_rows)]
+                    # 부족한 경우 반복으로 채우기
+                    extended_values = generated_values[:]
+                    while len(extended_values) < num_rows:
+                        extended_values.extend(generated_values[:min(len(generated_values), num_rows - len(extended_values))])
+                    df[col_name] = extended_values[:num_rows]
+            
+        except Exception as e:
+            print(f"LLM 컬럼 생성 완전 실패 ({col_name}): {str(e)}")
+            # 최후의 수단: 간단한 더미 값
+            df[col_name] = [f"LLM_FALLBACK_{i+1}" for i in range(num_rows)]
 
-        if len(generated_values) < num_rows:
-            generated_values.extend([f"LLM_INSUFFICIENT_DATA"] * (num_rows - len(generated_values)))
-        
-        df[col_name] = generated_values[:num_rows]
-
+    # 3. 최종 컬럼 순서 정리
     final_columns_order = [c.get('column_name') for c in columns_details if c.get('column_name')]
-    df = df[final_columns_order]
+    existing_columns = [col for col in final_columns_order if col in df.columns]
+    
+    if existing_columns:
+        df = df[existing_columns]
+    else:
+        # 컬럼이 하나도 없는 경우 빈 DataFrame 반환
+        df = pd.DataFrame()
             
     return df, total_prompt_tokens, total_candidates_tokens

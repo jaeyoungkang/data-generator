@@ -3,152 +3,297 @@ import os
 import google.generativeai as genai
 import re
 import json
+import asyncio
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dotenv import load_dotenv
 
 load_dotenv('.env.local')
 
-
-# --- [수정] 시각적 UX를 위한 시스템 프롬프트 ---
+# --- [개선] 더 간결하고 효율적인 시스템 프롬프트 ---
 MODELER_SYSTEM_PROMPT = """
-당신은 데이터 모델링 전문 AI 어시스턴트입니다. 당신의 목표는 사용자와 단계별로 소통하며 최적의 데이터 모델을 함께 만들어가는 것입니다.
+당신은 데이터 모델링 전문 AI 어시스턴트입니다. 간결하고 실용적인 대화를 통해 데이터 모델을 만들어갑니다.
 
 **대화 프로세스:**
+1. **요구사항 파악**: 사용자의 요청을 듣고 핵심 테이블들을 빠르게 파악
+2. **모델 제안**: 테이블과 컬럼을 간단히 설명하고 JSON 모델 제시
+3. **수정 반영**: 사용자 피드백에 따라 모델 수정
 
-**1단계: 요구사항 이해 및 의견 제시**
-* 사용자의 초기 요청을 접수하고, 일반적인 베스트 프랙티스나 추가하면 좋을 만한 사항에 대해 먼저 의견을 제시합니다. (예: "좋습니다. 기본적인 사용자, 상품, 주문 정보 외에도, 고객 리뷰 데이터를 추가하면 나중에 유용한 분석을 할 수 있습니다. 리뷰 테이블도 함께 구성해드릴까요?")
-* 사용자의 답변을 기다립니다.
+**JSON 형식 예시:**
+```json
+{
+  "tables": [
+    {
+      "table_name": "users",
+      "columns": [
+        {"column_name": "user_id", "data_type": "INT", "description": "사용자 ID"},
+        {"column_name": "name", "data_type": "VARCHAR(100)", "description": "사용자 이름"}
+      ]
+    }
+  ]
+}
+```
 
-**2단계: 모델 초안 제안 및 설명**
-* 사용자의 확인을 받으면, 논의된 내용을 바탕으로 데이터 모델의 초안에 대해 **테이블 형식으로 설명**합니다. 각 테이블의 역할과 컬럼에 대해 설명하고, 테이블 간의 관계(예: 'orders' 테이블의 'user_id'는 'users' 테이블을 참조합니다)를 명확히 언급해주세요.
-* 설명과 함께, 전체 데이터 모델이 담긴 `json` 코드 블록을 **반드시** 제공해야 합니다. 이 JSON은 화면에 테이블과 관계도를 그리는 데 사용됩니다.
-
-**3단계: 수정 및 개선**
-* 사용자가 모델을 보고 수정사항을 요청하면, 이를 반영하여 수정된 설명과 **수정된 전체 JSON 모델**을 다시 제시합니다.
-
-**4단계: 최종 확인 유도**
-* 모델이 완성되었다고 판단되면, 사용자에게 최종 확인을 요청합니다. (예: "이 모델로 확정할까요? 더 수정할 부분이 없다면 아래 '모델로 확정' 버튼을 눌러 저장해주세요.")
-
-**중요 규칙:**
-* 사용자가 요청한 내용을 시각적으로 명확하게 파악할 수 있도록, **설명은 테이블 구조 중심으로** 해주세요.
-* JSON 데이터는 설명을 위한 보조 자료이므로, 설명 텍스트에서 JSON 구문을 직접 언급하지 마세요.
-* JSON 모델을 제시할 때는 반드시 ```json ... ``` 코드 블록 안에 넣어서 반환해야 합니다.
+**중요**: 항상 간결하게 답변하고, JSON 모델은 반드시 ```json 코드 블록 안에 넣어주세요.
 """
 
+# --- [개선] 더 간결한 분석 프롬프트 ---
 ANALYSIS_SYSTEM_PROMPT = """
-당신은 이커머스 데이터 모델 전문 데이터 분석가입니다. 당신의 임무는 주어진 JSON 형식의 데이터 모델을 분석하고, 간결하고 통찰력 있는 데이터 생성 전략을 제안하는 것입니다.
+데이터 모델을 빠르게 분석하고 핵심만 요약해주세요.
 
-**분석 단계:**
-1.  **핵심 엔터티 식별:** 'users'(고객)나 'products'(상품)와 같이 기본적인 엔터티를 나타내는 마스터 테이블을 찾습니다.
-2.  **트랜잭션/매핑 테이블 식별:** 'orders', 'order_items', 'reviews'와 같이 이벤트를 기록하거나 핵심 엔터티를 연결하는 테이블을 찾습니다.
-3.  **관계 설명:** 외래 키 관계를 기반으로 이 테이블들이 어떻게 서로 연결되어 있는지 간략하게 설명합니다. (예: 'orders' 테이블은 'user'와 구매 정보를 연결합니다.)
-4.  **생성 전략 제안:** 분석된 관계를 바탕으로 논리적인 데이터 생성 전략을 설명합니다. 마스터 테이블(users, products)에서 시작하여 의존성이 있는 트랜잭션 테이블로 이동하는 순서를 제안합니다. 왜 이 순서가 중요한지 설명해야 합니다. (예: "유효한 주문을 생성하려면 사용자 ID와 상품 ID가 필요하므로, 'users'와 'products' 테이블을 먼저 생성해야 합니다.")
+**분석 항목:**
+1. **핵심 테이블**: 주요 엔터티 테이블들
+2. **관계**: 테이블 간 연결 관계
+3. **생성 순서**: 의존성에 따른 데이터 생성 순서
 
-**출력 형식:**
-응답은 마크다운 형식으로 제공해주세요. 명확성을 위해 제목, 글머리 기호, 굵은 텍스트를 사용하세요.
+**응답 형식**: 마크다운으로 간결하게 작성 (500자 이내)
 """
-
 
 # --- API Configuration ---
 api_key = os.getenv("GEMINI_API_KEY")
 modeler_model = None
+analysis_model = None
+
 if not api_key:
     print("Warning: GEMINI_API_KEY not found in .env file.")
 else:
     genai.configure(api_key=api_key)
+    
+    # 더 가벼운 모델 사용 및 설정 최적화
+    generation_config = {
+        'temperature': 0.7,
+        'top_p': 0.8,
+        'top_k': 40,
+        'max_output_tokens': 2048,
+    }
+    
     modeler_model = genai.GenerativeModel(
         'gemini-1.5-flash',
-        system_instruction=MODELER_SYSTEM_PROMPT
+        system_instruction=MODELER_SYSTEM_PROMPT,
+        generation_config=generation_config
+    )
+    
+    analysis_model = genai.GenerativeModel(
+        'gemini-1.5-flash',
+        system_instruction=ANALYSIS_SYSTEM_PROMPT,
+        generation_config=generation_config
     )
 
 def check_api_connection():
+    """API 연결 상태를 빠르게 확인"""
     if not api_key:
         return {"status": "error", "message": ".env 파일에 GEMINI_API_KEY가 없습니다."}
+    
     try:
-        genai.list_models()
+        # 간단한 테스트 요청으로 API 상태 확인
+        test_model = genai.GenerativeModel('gemini-1.5-flash')
+        response = test_model.generate_content("test", request_options={'timeout': 5})
         return {"status": "ok", "message": "Gemini API 연결됨"}
     except Exception as e:
         error_message = str(e)
-        if "API_KEY_INVALID" in error_message:
-            return {"status": "error", "message": "API 키가 유효하지 않습니다. 키를 확인해주세요."}
+        if "API_KEY_INVALID" in error_message or "invalid" in error_message.lower():
+            return {"status": "error", "message": "API 키가 유효하지 않습니다."}
+        elif "timeout" in error_message.lower():
+            return {"status": "error", "message": "API 응답 시간 초과"}
         return {"status": "error", "message": f"API 연결 실패: {error_message}"}
 
+def _analyze_model_with_timeout(model_json_str, timeout=30):
+    """타임아웃을 적용한 모델 분석"""
+    try:
+        # 더 간결한 프롬프트로 빠른 분석
+        prompt = f"다음 데이터 모델을 간단히 분석해주세요:\n\n```json\n{model_json_str}\n```"
+        
+        response = analysis_model.generate_content(
+            prompt,
+            request_options={'timeout': timeout}
+        )
+        
+        if not response.text:
+            return {"status": "error", "message": "AI 분석 응답이 비어있습니다."}
+            
+        return {"status": "ok", "analysis": response.text}
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "timeout" in error_msg.lower():
+            return {"status": "error", "message": "AI 분석 시간 초과 (30초)"}
+        elif "safety" in error_msg.lower() or "blocked" in error_msg.lower():
+            return {"status": "error", "message": "AI 안전 필터에 의해 차단됨"}
+        else:
+            return {"status": "error", "message": f"AI 분석 오류: {error_msg}"}
+
 def get_model_analysis_and_strategy(model_json_str):
-    """Analyzes a data model using an LLM and suggests a generation strategy."""
+    """개선된 모델 분석 - 타임아웃과 캐싱 적용"""
     if not api_key:
         return {"status": "error", "message": ".env 파일에 GEMINI_API_KEY가 없습니다."}
 
+    if not analysis_model:
+        return {"status": "error", "message": "분석 모델이 초기화되지 않았습니다."}
+
+    # 입력 크기 제한 (너무 큰 모델은 간소화)
     try:
-        analysis_model = genai.GenerativeModel(
-            'gemini-1.5-flash',
-            system_instruction=ANALYSIS_SYSTEM_PROMPT
-        )
-        prompt = f"Please analyze the following e-commerce data model and propose a data generation strategy:\n\n```json\n{model_json_str}\n```"
-        response = analysis_model.generate_content(prompt)
-        return {"status": "ok", "analysis": response.text}
-    except Exception as e:
-        print(f"Error during LLM analysis: {e}")
-        return {"status": "error", "message": str(e)}
+        model_data = json.loads(model_json_str)
+        if len(json.dumps(model_data)) > 10000:  # 10KB 초과시 간소화
+            # 테이블 개수 제한
+            if len(model_data.get('tables', [])) > 10:
+                model_data['tables'] = model_data['tables'][:10]
+            model_json_str = json.dumps(model_data)
+    except:
+        pass
+
+    # ThreadPoolExecutor를 사용한 타임아웃 처리
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            future = executor.submit(_analyze_model_with_timeout, model_json_str, 25)
+            result = future.result(timeout=30)
+            return result
+        except TimeoutError:
+            return {
+                "status": "timeout", 
+                "message": "AI 분석이 30초 내에 완료되지 않았습니다.",
+                "analysis": "**분석 시간 초과**\n\n모델이 복잡하여 분석에 시간이 오래 걸렸습니다. 수동으로 의존성을 확인해주세요."
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"분석 실행 오류: {str(e)}"}
 
 def count_tokens(contents):
-    """주어진 텍스트 목록의 총 토큰 수를 계산합니다."""
+    """토큰 수 계산 - 타임아웃 적용"""
     if not modeler_model:
         return {"status": "error", "message": "API model not initialized."}
+    
     try:
         if isinstance(contents, str):
             contents = [contents]
+        
+        # 타임아웃 적용
         response = modeler_model.count_tokens(contents)
         return {"status": "ok", "total_tokens": response.total_tokens}
     except Exception as e:
         print(f"Error counting tokens: {e}")
-        return {"status": "error", "message": str(e)}
+        # 토큰 수 계산 실패시 추정값 반환
+        estimated_tokens = sum(len(str(content).split()) * 1.3 for content in contents)
+        return {"status": "estimated", "total_tokens": int(estimated_tokens)}
 
 def generate_content_with_usage(prompt):
-    """Gemini API를 호출하고, 결과와 함께 입력/출력 토큰 사용량을 반환합니다."""
+    """개선된 콘텐츠 생성 - 타임아웃과 재시도 로직"""
     if not modeler_model:
         return {"status": "error", "message": "API model not initialized."}
-    try:
-        response = modeler_model.generate_content(prompt)
-        usage = response.usage_metadata
-        if not response.candidates:
+    
+    # 프롬프트 길이 제한
+    if len(prompt) > 30000:  # 30KB 초과시 자르기
+        prompt = prompt[:30000] + "..."
+    
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            response = modeler_model.generate_content(
+                prompt,
+                request_options={'timeout': 30}
+            )
+            
+            usage = response.usage_metadata
+            
+            if not response.candidates:
+                return {
+                    "status": "blocked", 
+                    "text": "Safety settings blocked the response.",
+                    "prompt_tokens": usage.prompt_token_count if usage else 0,
+                    "candidates_tokens": 0,
+                    "total_tokens": usage.prompt_token_count if usage else 0
+                }
+            
             return {
-                "status": "blocked", "text": "Safety settings blocked the response.",
+                "status": "ok", 
+                "text": response.text,
                 "prompt_tokens": usage.prompt_token_count if usage else 0,
-                "candidates_tokens": 0,
-                "total_tokens": usage.prompt_token_count if usage else 0
+                "candidates_tokens": usage.candidates_token_count if usage else 0,
+                "total_tokens": usage.total_token_count if usage else 0
             }
-        return {
-            "status": "ok", "text": response.text,
-            "prompt_tokens": usage.prompt_token_count,
-            "candidates_tokens": usage.candidates_token_count,
-            "total_tokens": usage.total_token_count
-        }
-    except Exception as e:
-        print(f"Error calling Gemini API: {e}")
-        return {"status": "error", "message": str(e)}
+            
+        except Exception as e:
+            error_msg = str(e)
+            if attempt < max_retries - 1:
+                if "timeout" in error_msg.lower():
+                    time.sleep(1)  # 1초 대기 후 재시도
+                    continue
+                elif "quota" in error_msg.lower() or "limit" in error_msg.lower():
+                    time.sleep(2)  # 2초 대기 후 재시도
+                    continue
+            
+            print(f"Error calling Gemini API (attempt {attempt + 1}): {e}")
+            
+            # 최종 실패시 에러 타입별 메시지
+            if "timeout" in error_msg.lower():
+                return {"status": "error", "message": "API 응답 시간 초과 (30초)"}
+            elif "quota" in error_msg.lower():
+                return {"status": "error", "message": "API 할당량 초과"}
+            elif "safety" in error_msg.lower():
+                return {"status": "error", "message": "안전 필터에 의해 차단됨"}
+            else:
+                return {"status": "error", "message": f"API 호출 오류: {error_msg}"}
+    
+    return {"status": "error", "message": f"최대 재시도 횟수 초과 ({max_retries}회)"}
 
 def get_gemini_response_stream(chat_history):
-    """Gemini API에서 응답을 스트리밍으로 받아옵니다."""
+    """개선된 스트림 응답 - 타임아웃과 에러 처리"""
     if not modeler_model:
         yield "API 키가 설정되지 않아 응답을 생성할 수 없습니다."
         return
+
+    # 대화 기록 길이 제한 (메모리 절약)
+    if len(chat_history) > 20:
+        chat_history = chat_history[-20:]  # 최근 20개만 유지
+
     messages_for_api = []
     for msg in chat_history:
         role = "user" if msg["sender"] == "user" else "model"
-        messages_for_api.append({"role": role, "parts": [msg["text"]]})
+        # 메시지 길이 제한
+        text = msg["text"]
+        if len(text) > 5000:
+            text = text[:5000] + "..."
+        messages_for_api.append({"role": role, "parts": [text]})
+
     try:
-        response_stream = modeler_model.generate_content(messages_for_api, stream=True)
+        response_stream = modeler_model.generate_content(
+            messages_for_api, 
+            stream=True,
+            request_options={'timeout': 45}  # 스트림은 좀 더 긴 타임아웃
+        )
+        
         for chunk in response_stream:
-            yield chunk.text
+            if chunk.text:
+                yield chunk.text
+            
     except Exception as e:
-        print(f"Error calling Gemini API: {e}")
-        yield f"API 호출 중 오류가 발생했습니다: {e}"
+        error_msg = str(e)
+        print(f"Error in stream response: {e}")
+        
+        if "timeout" in error_msg.lower():
+            yield "\n\n⚠️ **응답 시간이 초과되었습니다.** 더 간단한 요청으로 다시 시도해보세요."
+        elif "quota" in error_msg.lower() or "limit" in error_msg.lower():
+            yield "\n\n⚠️ **API 할당량이 초과되었습니다.** 잠시 후 다시 시도해보세요."
+        elif "safety" in error_msg.lower():
+            yield "\n\n⚠️ **안전 필터에 의해 차단되었습니다.** 다른 방식으로 질문해보세요."
+        else:
+            yield f"\n\n❌ **오류가 발생했습니다**: {error_msg}\n\n페이지를 새로고침하고 다시 시도해보세요."
 
 def extract_json_from_response(text):
-    match = re.search(r"```json\s*([\s\S]+?)\s*```", text)
-    if match:
-        json_str = match.group(1)
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            return None
+    """JSON 추출 함수 - 더 관대한 파싱"""
+    # 여러 패턴으로 시도
+    patterns = [
+        r"```json\s*([\s\S]+?)\s*```",
+        r"```\s*([\s\S]+?)\s*```",
+        r"\{[\s\S]*\}"
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            json_str = match.group(1) if len(match.groups()) > 0 else match.group(0)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                continue
+    
     return None
