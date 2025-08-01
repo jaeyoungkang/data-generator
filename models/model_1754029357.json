@@ -1,0 +1,91 @@
+{
+    "tables": [
+        {
+            "table_name": "events",
+            "columns": [
+                {
+                    "column_name": "event_id",
+                    "data_type": "BIGINT",
+                    "primaryKey": true,
+                    "description": "이벤트 고유 ID"
+                },
+                {
+                    "column_name": "user_id",
+                    "data_type": "BIGINT",
+                    "description": "사용자 ID"
+                },
+                {
+                    "column_name": "event_name",
+                    "data_type": "VARCHAR(255)",
+                    "description": "이벤트 이름 (예: app_started, cleaning_started, map_created 등)"
+                },
+                {
+                    "column_name": "timestamp",
+                    "data_type": "TIMESTAMP",
+                    "description": "이벤트 발생 시간"
+                },
+                {
+                    "column_name": "properties",
+                    "data_type": "JSON",
+                    "description": "이벤트 속성 (예: {'product_model': 'A9', 'duration': 120, 'location': 'living_room'})"
+                },
+                {
+                    "column_name": "ip_address",
+                    "data_type": "VARCHAR(45)",
+                    "description": "사용자 IP 주소"
+                },
+                {
+                    "column_name": "user_agent",
+                    "data_type": "VARCHAR(255)",
+                    "description": "사용자 에이전트"
+                },
+                {
+                    "column_name": "device_id",
+                    "data_type": "VARCHAR(255)",
+                    "description": "디바이스 ID"
+                }
+            ]
+        },
+        {
+            "table_name": "users",
+            "columns": [
+                {
+                    "column_name": "user_id",
+                    "data_type": "BIGINT",
+                    "primaryKey": true,
+                    "description": "사용자 고유 ID"
+                },
+                {
+                    "column_name": "age",
+                    "data_type": "INT",
+                    "description": "사용자 나이"
+                },
+                {
+                    "column_name": "gender",
+                    "data_type": "VARCHAR(10)",
+                    "description": "사용자 성별"
+                },
+                {
+                    "column_name": "purchase_channel",
+                    "data_type": "VARCHAR(50)",
+                    "description": "구매 경로 (오프라인 매장, 자사몰, 오픈몰 등)"
+                },
+                {
+                    "column_name": "product_type",
+                    "data_type": "VARCHAR(50)",
+                    "description": "구매한 로봇청소기 종류"
+                },
+                {
+                    "column_name": "product_model",
+                    "data_type": "VARCHAR(50)",
+                    "description": "구매한 로봇청소기 모델"
+                },
+                {
+                    "column_name": "registration_date",
+                    "data_type": "DATE",
+                    "description": "제품 등록일"
+                }
+            ]
+        }
+    ]
+}

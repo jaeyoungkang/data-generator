@@ -1,0 +1,102 @@
+{
+    "tables": [
+        {
+            "table_name": "users",
+            "columns": [
+                {
+                    "column_name": "user_id",
+                    "data_type": "INT",
+                    "primaryKey": true,
+                    "description": "사용자 고유 ID"
+                },
+                {
+                    "column_name": "age",
+                    "data_type": "INT",
+                    "description": "사용자 나이"
+                },
+                {
+                    "column_name": "gender",
+                    "data_type": "VARCHAR(10)",
+                    "description": "사용자 성별"
+                },
+                {
+                    "column_name": "purchase_channel",
+                    "data_type": "VARCHAR(50)",
+                    "description": "구매 경로 (오프라인 매장, 자사몰, 오픈몰 등)"
+                },
+                {
+                    "column_name": "registration_date",
+                    "data_type": "DATE",
+                    "description": "제품 등록일"
+                }
+            ]
+        },
+        {
+            "table_name": "products",
+            "columns": [
+                {
+                    "column_name": "product_id",
+                    "data_type": "INT",
+                    "primaryKey": true,
+                    "description": "제품 고유 ID"
+                },
+                {
+                    "column_name": "product_name",
+                    "data_type": "VARCHAR(100)",
+                    "description": "제품 이름"
+                },
+                {
+                    "column_name": "model_name",
+                    "data_type": "VARCHAR(50)",
+                    "description": "제품 모델명"
+                },
+                {
+                    "column_name": "release_date",
+                    "data_type": "DATE",
+                    "description": "제품 출시일"
+                },
+                {
+                    "column_name": "core_features",
+                    "data_type": "TEXT",
+                    "description": "핵심 기능 목록 (JSON 형태로 저장)"
+                }
+            ]
+        },
+        {
+            "table_name": "usage_data",
+            "columns": [
+                {
+                    "column_name": "usage_id",
+                    "data_type": "INT",
+                    "primaryKey": true,
+                    "description": "사용 데이터 고유 ID"
+                },
+                {
+                    "column_name": "user_id",
+                    "data_type": "INT",
+                    "description": "사용자 ID (users 테이블 참조)"
+                },
+                {
+                    "column_name": "product_id",
+                    "data_type": "INT",
+                    "description": "제품 ID (products 테이블 참조)"
+                },
+                {
+                    "column_name": "feature_name",
+                    "data_type": "VARCHAR(100)",
+                    "description": "사용 기능 이름"
+                },
+                {
+                    "column_name": "usage_count",
+                    "data_type": "INT",
+                    "description": "기능 사용 횟수"
+                },
+                {
+                    "column_name": "usage_date",
+                    "data_type": "DATE",
+                    "description": "기능 사용 날짜"
+                }
+            ]
+        }
+    ]
+}
